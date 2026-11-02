@@ -8,14 +8,16 @@
 
 ## Motivation
 
-**MCP clients want an efficient way to keep local copies of resources up to date in near real time.** A webhook delivers each change without the client holding a connection open.
+**MCP clients want an *efficient* way to keep local copies of resources up to date in near *real time*.** A webhook delivers each change without the client holding a connection open.
 
-Keeping a copy current needs only the newest value, though, not every event on the way to it, so it calls for a different contract than a stream of events: here, an event only says that something changed, and a catch-up brings the newest value. It also differs from the state sync needs of tasks in other ways [Add the forward reference to where this is discussed].
+Keeping a copy current needs only the newest value, though, not every event on the way to it, so it calls for a different contract than a stream of events: here, an event only says that something changed, and a catch-up brings the newest value. It also differs from the state sync needs of tasks in other ways, which § *Why is this different from task state sync?* covers.
 
 A client watching a resource today has three problems:
 
-1. **It must hold a stream open or poll.** `notifications/resources/updated` arrives only on a `subscriptions/listen` stream, since [SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575). A long-lived stream fits load-balanced and edge infrastructure poorly: proxies close idle connections, edge and serverless platforms cap how long a request may run, and a deploy or scale-in drops every stream an instance holds. Since 2026-07-28 a broken stream cannot resume, so a change made while it is down is lost without a trace. Polling trades delay against cost instead: a short polling period spends a request per resource per interval, mostly to learn that nothing changed, and longer polling periods means the client's state lags farther behind.
-2. **It cannot tell whether it already holds the latest value.** The notification names the URI and nothing else, so a client must read the resource again to find out, even the client that made the change.
+1. **It must hold a stream open or poll.** Each has its own shortcomings:
+   - **Streaming.** `notifications/resources/updated` arrives only on a `subscriptions/listen` stream, since [SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575). A long-lived stream fits load-balanced and edge infrastructure poorly: proxies close idle connections, edge and serverless platforms cap how long a request may run, and a deploy or scale-in drops every stream an instance holds. Since 2026-07-28 a broken stream cannot resume, so a change made while it is down is lost without a trace.
+   - **Polling** trades ***near real time*** against ***efficiency***. A long polling period means the client's state lags far behind. A short polling period spends a request per resource per interval, mostly to learn that nothing changed.
+2. **It cannot tell whether it already holds the latest value.** The notification names the URI and nothing else, so each one costs a read, even when the client already holds the change. A ticket edited three times in a second costs three reads, though a read made after the third edit already brought the newest value, and the client that made an edit reads it back.
 3. **Catching up after a disconnect is inefficient.** A client back from a disconnect cannot tell which resources changed while it was away, so it must read every resource it watches again.
 
 ### SEP-3415's open question 2
@@ -43,7 +45,7 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 - **A client that can't take webhooks.** A command-line client polls `resources/catchup` for `https://notes.example/notes/{id}` as often as each result's `ttlMs` allows: one request for the whole collection, with no changes when nothing changed.
 - **A skill served over MCP.** A host that loaded `skill://code-review/SKILL.md` subscribes to `skill://code-review/{+path}`, hears of each changed file, and can ask for approval again before the model next uses the skill.
 
-§ *The design* answers the three problems in turn: a webhook needs no open stream, an event's moment tells a client whether it already holds the change, and one catch-up brings only what changed in a whole collection. § *Decisions* says why, against the alternatives.
+§ *The design* answers the three problems in turn: a webhook needs no open stream, an event's moment tells a client whether it already holds the change, so it skips the events for every change its last catch-up brought, and one catch-up brings only what changed in a whole collection. § *Decisions* says why, against the alternatives.
 
 ## The design
 
@@ -112,8 +114,8 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 ```
 
 - **R18.** A client subscribes with `events/subscribe`, naming `mcp.resource.updated` and a uri-specification as `arguments`: `{uri}`, `{uriTemplate}`, or later `{uriGlob}`. It then catches up, with no `from` the first time, so no change falls between the two, and refreshes the subscription as SEP-3415 says.
-- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the client's moment as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. The last page's `moment` is no earlier than any moment the server had sent when that page was read, and between them the pages' `changes` MUST hold every covered resource whose moment is after `from` and at or before that `moment`, the last time at its newest moment, deletions as tombstones. So a resource missing from them changed after that `moment`. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
-  - A uri-specification on a timeline gets the timeline's moment as its `moment` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither.
+- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the client's moment as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. The last page's `moment` is no earlier than any moment the server had sent when that page was read, and between them the pages' `changes` MUST hold every covered resource whose moment is after the first page's `from` and at or before that `moment`, the last time at its newest moment, deletions as tombstones. So a resource missing from them changed after that `moment`. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
+  - A uri-specification on a timeline gets the timeline's moment as its `moment` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither, or both `from` and R22's `cursor`.
   - A server meets the MUST by reading the timeline's moment before the resources, from one store, not from a lagging replica.
 - **R10.** Once a change is visible to a catch-up, the server MUST send `mcp.resource.updated` to each subscription covering each resource it touched, with the strawman's change-set entry as `data`, `revision` always present. Its `eventId` is unique to the moment and the uri, and SEP-3415's `cursor` stays null. A server MAY replace an undelivered event with a newer one for the same uri, leaving `truncated` false, as SEP-3415 does for events with no replay, and as Peter agreed. Across a server restart an event goes at most once, as SEP-3415 says of such events, and R12 recovers it.
 - **R11.** When a client receives that event, it MUST catch up, unless it already holds that uri, or its tombstone, at that moment or later, which lets the writer skip its own change.
@@ -186,51 +188,39 @@ timelines:
   {"uri": "tickets/ticket-3", "effect": "updated",
    "previousRevision": "095", "revision": "103",
    "patchMimeType": "application/merge-patch+json", "patch": {...}}],
- "hasMore": true, "moment": "105"}     // moment counts only when hasMore is false
+ "hasMore": true, "moment": "105"}
+// X applies the page, and its moment becomes "103", the last entry's revision.
+// ticket-5 changed at "102", but it sorts by its last change, at "104".
 
 // Meanwhile ticket-3 changes again, at "106".
 
-// Page 2 sends `from` again, and `cursor`: the last entry's revision.
+// Page 2 is an ordinary catch-up from X's new moment.
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
-  "from": "100", "cursor": "103",
-  "patchMimeTypes": ["application/merge-patch+json"]}}
+  "from": "103", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
-  // One entry for both of ticket-5's changes, patched from "090", which X
-  // holds. Based on "103", where page 1 stopped, it would start from "102",
-  // which X never held. So every page sends `from`.
   {"uri": "tickets/ticket-5", "effect": "updated",
-   "previousRevision": "090", "revision": "104",
+   "previousRevision": "102", "revision": "104",    // ticket-5 as of "103"
    "patchMimeType": "application/merge-patch+json", "patch": {...}},
   {"uri": "tickets/ticket-6", "effect": "created", "revision": "105",
    "contents": {...}}],
  "hasMore": true, "moment": "106"}
+// X holds ticket-5 at "090", not "102", so X reads it (R19).
+// X's moment becomes "105".
 
 // Page 3.
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
-  "from": "100", "cursor": "105",
-  "patchMimeTypes": ["application/merge-patch+json"]}}
+  "from": "105", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
   {"uri": "tickets/ticket-3", "effect": "updated",
-   "previousRevision": "095", "revision": "106",    // ticket-3 as of "100"
+   "previousRevision": "103", "revision": "106",
    "patchMimeType": "application/merge-patch+json", "patch": {...}}],
  "hasMore": false, "moment": "106"}
-// X holds ticket-3 at "103" from page 1, not "095", so X reads it (R19).
+// X holds ticket-3 at "103" from page 1, so X applies the patch.
 // X's moment for tickets/{id} becomes "106".
 ```
 
-**Why a later page sends both `from` and `cursor`.** `from` says what the client holds: every resource it hasn't yet been sent in this catch-up is still at its version as of `from`, so that is where a patch starts. `cursor` says how far the pages have got. One value can't do both:
-
-```text
-X holds ticket-5 at "090". ticket-5 changed at "102" and "104", and page 1
-ended at "103", so ticket-5 comes on page 2:
-  based on "100", the `from`:    patch 090 to 104   X holds "090": applies
-  based on "103", the `cursor`:  patch 102 to 104   X never had "102": reads
-```
-
-Rejecting the page and catching up afresh from a later moment doesn't help either, since after page 1 X holds ticket-3 at `"103"` and ticket-5 at `"090"`, which no single moment matches. And a client starting over pages through resources older than the history the server keeps, so its later pages send only `cursor`, which the server pages from without the check R21 makes on a `from`.
-
-- **R14.** A long catch-up comes back in pages. Every result carries `hasMore`, as SEP-3415's poll mode does, and `moment`, the timeline's moment as the page was read. While `hasMore` is true, the client asks again with the same uri-specification, `from` and `patchMimeTypes`, plus `cursor`, the `revision` of the page's last entry. Each page returns the next resources, in moment order, whose moments are after `cursor`, or `from` on the first page, and never splits the resources at one moment across two pages. The `moment` of the page with `hasMore` false becomes the client's moment.
-  - Every page bases its patches on `from`, what the client held when it began. A resource that changes while the client pages comes again on a later page, and the client, which holds the earlier page's copy, reads it (R19). A client that stops partway may keep its last entry's `revision` as its moment, which can cost reads but misses no change.
+- **R14.** A long catch-up comes back in pages. Every result carries `hasMore`, as SEP-3415's poll mode does, and `moment`, the timeline's moment as the page was read. A page holds the first resources, in moment order, whose moments are after `from`, and never splits the resources at one moment across two pages. While `hasMore` is true, the client applies the page, takes the `revision` of its last entry as its moment, and catches up again from it, so each page is an ordinary catch-up. The `moment` of the page with `hasMore` false becomes the client's moment.
+  - A resource sorts by its moment, which is its last change, so one that changed more than once before a catch-up can come on a page whose `from` is later than its earlier change, as ticket-5 does. Its patch then starts at a moment the client never held, and the client reads it (R19). Nothing is missed.
   - Kubernetes reads every page of a list from one snapshot, so its `continue` token expires, after five minutes by default. A catch-up needs no snapshot, since a client wants only each resource's newest value.
 - **R19.** Each entry in `changes` is one resource's change from `from` to now: the strawman's change-set entry, with contents added. `previousRevision` is the resource's moment at `from`, absent if it did not exist then. `effect` is `deleted` if it no longer exists, else `created` if it did not exist at `from`, else `updated`. A non-deletion carries `contents`, one `TextResourceContents` or `BlobResourceContents`, or a `patch` from the contents at `previousRevision`, with its `patchMimeType`, in a listed format that applies. A merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) applies to one `application/json` text entry, and patches its parsed `text`. JSON-based patches travel as JSON, others as strings. The server sends `contents` when no listed format applies, when there is no `previousRevision`, or when it no longer keeps those contents, and MAY when `contents` is smaller.
   - A client applies a patch only to a copy at its `previousRevision`, and otherwise reads the resource (D2). If that read fails, or returns a moment earlier than the entry's `revision`, the client's moment stays put, and it catches up again.
@@ -272,11 +262,11 @@ A -> X   reply: ticket-3 at "109"              earlier than "111", so ignored
 
 **Starting over.** A client with no copies, or with a moment too old (R21), catches up with no `from`.
 
-- **R22.** A catch-up with no `from` returns every covered resource that exists, in moment order from the start of the timeline, with no tombstones. A client starting over this way keeps its first page's `moment`, and after the last page catches up from it, which brings any deletion made while it paged. It then drops each copy that neither the pages nor that catch-up named, if the copy's moment is at or before that catch-up's `moment`.
+- **R22.** A catch-up with no `from` returns every covered resource that exists, in moment order from the start of the timeline, with no tombstones. While `hasMore` is true, the client asks again with no `from` and with `cursor`, the `revision` of the page's last entry, and gets the resources after it. A `cursor` says how far the list has got, not a moment the client holds copies as of, so the server doesn't check it against R21's history, which a start-over often reaches back past. A client starting over this way keeps its first page's `moment`, and after the last page catches up from it, which brings any deletion made while it paged. It then drops each copy that neither the pages nor that catch-up named, if the copy's moment is at or before that catch-up's `moment`.
 
 **A moment too old to answer from.**
 
-- **R21.** A server keeps each resource's moment, deletions included, back to a moment of its choosing, and may drop old contents at any time, since R19 then sends `contents`. A catch-up whose `from` is earlier than that, on any of its pages, or later than the timeline's moment, as after a restore from a backup, gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (D4). A server SHOULD keep that history longer than a full catch-up of its largest collection takes.
+- **R21.** A server keeps each resource's moment, deletions included, back to a moment of its choosing, and may drop old contents at any time, since R19 then sends `contents`. A catch-up whose `from` is earlier than that, or later than the timeline's moment, as after a restore from a backup, gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (D4). A server SHOULD keep that history longer than a full catch-up of its largest collection takes.
 
 **Resources a client may not read.** Q6 asks what a client sees of them.
 
@@ -364,14 +354,14 @@ IDs follow the order the decisions were recorded, not the order shown, and a gap
 | D3 | A catch-up needs no subscription (R13), so clients that poll or listen on a stream can use it. (Larry, 2026-10-31) | Naming a subscription so a lost one gets `NotFound`, which shuts those clients out. |
 | D4 | A `from` too old gets `momentExpired`, and the client starts over (R21), as Kubernetes answers with `410 Gone` and core an expired cursor with `-32602`. (Claude, 2026-10-31; Larry confirmed, 2026-11-01) | A flag with the whole current state, or SEP-3415's `truncated: true`, either of which a client could miss and keep deleted copies. |
 | D5 | Events carry no contents (R10), so a lost, repeated or late one does no harm. A change then costs a subscriber an event and a catch-up, one round trip more than a delivery carrying the change, with about the same bytes. The writer pays nothing extra, and N changes before a catch-up cost N events and one catch-up. (Larry, 2026-10-31) | The first flavor's `full` and `patch` deliveries, which needed `fromVersion` and a resubscribe that drops queued deliveries (its R58). |
-| D6 | Moments are ordered (R3, R5), so one string serves as version, revision, a client's place and a page's `cursor`, at the cost of R5's atomic step on each timeline. (Larry, 2026-10-31) | The first flavor's versions, compared only for equality, as ETags are, which needed `fromVersion` to order deliveries. |
+| D6 | Moments are ordered (R3, R5), so one string serves as version, revision, a client's place and a start-over's `cursor`, at the cost of R5's atomic step on each timeline. (Larry, 2026-10-31) | The first flavor's versions, compared only for equality, as ETags are, which needed `fromVersion` to order deliveries. |
 | D7 | Writes are the strawman's four methods (R7, R17), so a writer's reply carries the moment. (Larry, 2026-10-31) | The first flavor's writes outside MCP, where each server decided who made a version. |
 | D8 | Plain HTTP access is left out, since nothing here rests on HTTP's `ETag`. (Larry, 2026-10-31) | The first flavor's HTTP, which argued for the equality-only versions D6 replaces. |
 | D9 | **(was Q2)** A server may list a uri that a template it lists covers, on the template's timeline (R1). (Larry, 2026-11-01) | Listings that never overlap, which would stop a common practice for nothing. |
 | D10 | **(was Q5)** The prototype serves tickets and notes, on one timeline in the demo and on two in the tests, with zero-padded counters. (Larry, 2026-11-01) | ULIDs, which would exercise R6 but read badly in the demo. |
 | D11 | Patch formats are listed in `patchMimeTypes`, with `contents` for any entry no format fits (R19), as HTTP falls back for content codings ([RFC 9110 § 12.5.3](https://www.rfc-editor.org/rfc/rfc9110#section-12.5.3)) and deltas ([RFC 3229 § 5.2](https://www.rfc-editor.org/rfc/rfc3229#section-5.2)). (Claude, 2026-10-31; Larry confirmed, 2026-11-01) | A `form` parameter, which could only repeat or contradict the list, or an error, which costs a second request. |
 | D12 | A catch-up's result is core's `CacheableResult`, and a polling client waits its `ttlMs` (R13). (Claude, 2026-11-01, for Larry to confirm) | A field of our own, like SEP-3415's `nextPollMs`, saying what `ttlMs` says. |
-| D13 | Every page carries `hasMore`, as SEP-3415's poll mode does, and `moment`. A later page sends `from` again, and `cursor`, the previous page's last `revision` (R14). (Larry, 2026-11-01) | A fixed end sent back on every page, `through`, which kept a resource changed while the client paged out of later pages, at the cost of a field and a catch-up after the last page. Or calling again from each page's last moment with no `from`, which loses the patch's starting moment for every resource whose changes straddle a page boundary, and still needs `cursor` for starting over. |
+| D13 | Every page carries `hasMore`, as SEP-3415's poll mode does, and `moment`. While `hasMore` is true, the client takes the last entry's `revision` as its moment and catches up again from it, so each page is an ordinary catch-up, as each poll is in SEP-3415 (R14). A client starting over sends that `revision` as `cursor` instead (R22). (Larry, 2026-11-02) | Sending the first page's `from` again on every page, with a `cursor` saying where the last page stopped. That patches a resource whose changes straddle a page's end, which this design reads, but needs both fields on every page and a rule for which one a patch starts from. Or a fixed end sent back on every page, `through`, which kept a resource changed while the client paged out of later pages, at the cost of a field and a catch-up after the last page. |
 
 ## Notes kept out of the proposal
 
