@@ -4,7 +4,7 @@
 
 ## Objective
 
-**An MCP client keeps copies of resources current by webhook. Each change arrives as an `mcp.resource.updated` event, the event type SEP-3415's Open Question 2 sketches, which names the changed resource and the moment of the change, such as `"108"`, and carries none of its contents. The client then catches up: it asks for every change after the moment it is caught up to.** This repo builds a working prototype of that, with the Filesystems working group's strawman write methods beside it, and the proposal is written from it.
+**An MCP client keeps copies of resources current by webhook. Each change arrives as an `mcp.resource.updated` event, the event type SEP-3415's Open Question 2 sketches, which names the changed resource and the moment of the change, such as `"108"`, and carries none of its contents. The client then catches up by asking for every change after the moment it is caught up to.** This repo builds a working prototype of that, with the Filesystems working group's strawman write methods beside it, and the proposal is written from it.
 
 ## Motivation
 
@@ -57,7 +57,7 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 | `"107"` | ticket-7 closed as a duplicate of ticket-9, both changed in one step |
 | `"108"` | ticket-3 closed |
 
-The server keeps the latest moment and mints each new one later (R5). An event names the moment of its change, and a client keeps the moment it is caught up to, so it knows whether it already has the change, and a catch-up brings every change after. A database's read replica follows its primary's log the same way, as MongoDB's secondaries follow its oplog, and wherever it stops, it holds the data as of that point, only behind. A catch-up differs in sending each resource as it stood, not the operations that changed it, so a ticket edited five times comes once.
+The server keeps the latest moment and mints each new one later (R5). An event names the moment of its change, and a client keeps the moment it is caught up to, so it knows whether it already has the change, and a catch-up brings every change after. A database's read replica follows its primary's log the same way, as MongoDB's secondaries follow its oplog, and wherever it stops, it holds the data as of that point, only behind. A catch-up differs in sending each resource once, as its contents or a patch from an earlier revision, rather than every operation, but the idea is the same.
 
 Rules are numbered R1 and up across the sections below. Each keeps its ID when others are added or removed, so the IDs follow the order the rules were raised, not the order shown, and a gap is a rule removed.
 
@@ -283,6 +283,7 @@ A -> X   reply: ticket-3 at "109"              earlier than "111", so ignored
 **Missed events.**
 
 - **R12.** A client SHOULD catch up on each uri-specification it subscribed to whenever it may have missed events: after each SEP-3415 refresh, on reconnecting to its gateway or a `subscriptions/listen` stream, on starting, and on a `gap` envelope. A subscription with no expiry still gets SEP-3415's occasional refresh.
+  - A client can miss events without knowing, as a backend can when its webhook endpoint is down while the process holding its copies stays up. SEP-3415 retries each event, so a short outage loses none, and a missed event costs nothing once another arrives for the uri-specification, since R11's catch-up brings every change after the moment the client is caught up to. A quiet collection stays stale at most until the next refresh, whose `deliveryStatus` says whether deliveries had been failing, so such a client sets its refresh interval to the staleness it can tolerate, even when granted no expiry.
 
 **Starting over.** A client caught up to a moment too old (R21), or whose catch-up meets a moment too large for one result (R14), reads the collection again, as a new client does (R18).
 
