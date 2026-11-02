@@ -49,6 +49,16 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 
 ## The design
 
+**The key idea is a timeline of moments.** A server records each change to its resources at a moment on a timeline: a string that sorts after every moment before it, such as a zero-padded counter. The `tickets` timeline in the examples below begins like this:
+
+| moment | change |
+|---|---|
+| `"101"` | ticket-3 opened |
+| `"107"` | ticket-7 closed as a duplicate of ticket-9, both changed in one step |
+| `"108"` | ticket-3 closed |
+
+The server keeps the timeline's latest moment and mints each new one later than it (R5). Every event names the moment of its change, and a client keeps the moment it is caught up to, holding every change at or before it. So an event's moment tells the client whether it already has that change, and a catch-up brings every change after the moment the client is caught up to. A database's read replica follows its primary the same way: it applies the primary's log of changes in order, as MongoDB's secondaries apply its oplog, and wherever it stops, it holds the data as it stood at the last change it applied, only behind. A catch-up differs in sending each resource as it stood, rather than the operations that changed it, so a ticket edited five times since the client's last catch-up comes once. The happy path below shows a timeline at work, and § *Timelines and moments* says how a server keeps one.
+
 Rules are numbered R1 and up across the sections below. Each keeps its ID when others are added or removed, so the IDs follow the order the rules were raised, not the order shown, and a gap is a rule removed.
 
 ### Definitions
@@ -233,7 +243,7 @@ timelines:
 ```
 
 - **R14.** A server may stop a catch-up short of the timeline's latest moment, to keep its result small. Its `nextFrom` is then where it stopped, never partway through one moment's changes, and `hasMore` is true, as in SEP-3415's poll mode. It may stop short with no changes, as after scanning many changes to another collection on a shared timeline. The client applies the changes, and is caught up to `nextFrom`. While `hasMore` is true, it catches up again at once, without waiting `ttlMs`, as SEP-3415's poll mode ignores `nextPollMs`. A catch-up may run past the server's usual size to finish a moment. A server that can't send one moment's changes in a single result answers `InvalidParams` (`-32602`) with `data.reason` `"momentTooLarge"`, and the client starts over (R23), since a collection read pages freely and the catch-up after it starts past that moment.
-  - Each catch-up leaves the client's copies as they stood at its `nextFrom`, so the next one's patches start where the copies are. A database's read replica follows its primary the same way: it applies the primary's log of changes in order, as MongoDB's secondaries apply its oplog, and wherever it stops, it holds the data as it stood at the last change it applied, only behind. A catch-up differs in sending revisions, each resource as it stood, rather than the operations that made them.
+  - Each catch-up leaves the client's copies as they stood at its `nextFrom`, so the next one's patches start where the copies are, as a read replica's do (§ *The design*).
   - A resource changed on both sides of a catch-up's `nextFrom` comes in that catch-up and the next, as ticket-5 does, so its `contents`, when sent, travel more than once. A catch-up that reaches the timeline's latest moment brings each resource once, at its revision.
   - Kubernetes reads every page of a list from one snapshot, so its `continue` token expires, after five minutes by default. A catch-up that stops short needs no snapshot, since the next is an ordinary catch-up, which expires only as any `from` does (R21).
 - **R19.** Each entry in `changes` is one resource's change from `from` to the catch-up's `nextFrom` (R13): the strawman's change-set entry, with contents added. `previousRevision` is the resource's revision at `from`, absent if it did not exist then. `effect` is `deleted` if the change ends with the resource gone, else `created` if it did not exist at `from`, else `updated`. A non-deletion carries `contents`, one `TextResourceContents` or `BlobResourceContents`, or a `patch` from the contents at `previousRevision`, with its `patchMimeType`, in a listed format that applies. A merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) applies to one `application/json` text entry, and patches its parsed `text`. JSON-based patches travel as JSON, others as strings. The server sends `contents` when no listed format applies, when there is no `previousRevision`, or when it no longer keeps those contents, and MAY when `contents` is smaller.
