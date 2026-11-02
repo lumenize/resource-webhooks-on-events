@@ -62,7 +62,7 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 | moment | The point a change takes its timeline to, a string that sorts after every moment before it. A resource's moment is that of its last change. A client's moment for a uri-specification is where its next catch-up starts: the moment it last caught up to, or the one its collection read began at (R22). The Filesystems strawman calls a resource's moment its revision, so its fields `previousRevision` and `revision` hold moments (R7). | `"108"` |
 | tombstone | What a deleted resource leaves: its uri and the moment it was deleted. | ticket-3, deleted at `"111"` |
 | copy | The contents a client last received for a resource, with the resource's moment then. | ticket-3's JSON at `"101"` |
-| catch-up | A `resources/catchup` request and its result: every change to a uri-specification after the client's moment for it. | step 6 below |
+| catch-up | A `resources/catchup` request and its result: every change to a uri-specification after the client's moment for it, up to the result's `moment`. | step 6 below |
 
 ### The happy path
 
@@ -122,7 +122,7 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 
 - **R18.** A client subscribes with `events/subscribe`, naming `mcp.resource.updated` and a uri-specification as `arguments`: `{uri}`, `{uriTemplate}`, or later `{uriGlob}`, and refreshes the subscription as SEP-3415 says. A client with no moment for the uri-specification first reads its collection (R22). Once subscribed, it catches up from its moment, so no change falls between the read and the subscription.
 - **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its moment in `_meta` (R7), and `moment`, the timeline's moment, which the server reads before the page's resources. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. A resource that doesn't change while the client pages MUST come exactly once. The client keeps its first page's `moment` as its moment, so the catch-up that follows brings whatever changed while it paged, deletions included. The read never answers `momentExpired` or `momentTooLarge`, and its result is a core `CacheableResult`.
-- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the client's moment as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. The last page's `moment` is no earlier than any moment the server had sent when that page was read, and between them the pages' `changes` MUST hold every covered resource whose moment is after the first page's `from` and at or before that `moment`, the last time at its newest moment, deletions as tombstones. So a resource missing from them changed after that `moment`. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
+- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the client's moment as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. A catch-up's `changes` MUST hold every covered resource changed after `from` and at or before its `moment`, as it stood at `moment`, a deleted one as a tombstone, so a resource missing from them did not change in that span. With `hasMore` false, its `moment` is no earlier than any moment the server had sent when it was read. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
   - A uri-specification on a timeline gets the timeline's moment as its `moment` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither. A catch-up with no `from` gets `InvalidParams` too.
   - A server meets the MUST by reading the timeline's moment before the resources, from one store, not from a lagging replica.
 - **R10.** Once a change is visible to a catch-up, the server MUST send `mcp.resource.updated` to each subscription covering each resource it touched, with the strawman's change-set entry as `data`, `revision` always present. Its `eventId` is unique to the moment and the uri, and SEP-3415's `cursor` stays null. A server MAY replace an undelivered event with a newer one for the same uri, leaving `truncated` false, as SEP-3415 does for events with no replay, and as Peter agreed. Across a server restart an event goes at most once, as SEP-3415 says of such events, and R12 recovers it.
@@ -175,7 +175,7 @@ timelines:
 - **R6.** A server SHOULD mint each moment as the later of a fresh one and the one just after the timeline's current moment, so R5's check rejects one only when another writer got there first. A Durable Object seeds its ULID library's monotonic mode from the stored moment, since that mode forgets its last ULID on a restart.
 - **R7.** A resource's moment MUST be its revision in the strawman's sense, so `ifMatch` checks it, and this extension's clients may also order revisions. The prototype builds the strawman's `resources/stat`, `resources/create`, `resources/update` and `resources/delete` as a second strawman. Every change-set entry in a write's result carries `revision`, a deletion's included. A `resources/read` result MUST carry each item's moment in `_meta`, under the strawman's provisional key, `io.modelcontextprotocol/resource-revision`.
 
-### A catch-up that pages
+### A catch-up that stops short
 
 ```jsonc
 // X's moment for tickets/{id} is "100". X holds ticket-3 at "095" and ticket-5
@@ -185,9 +185,9 @@ timelines:
 //   "103"  ticket-3 updated
 //   "104"  ticket-5 updated again: two changes to one resource
 //   "105"  ticket-6 created
-// A sends two entries a page.
+// A sends at most two entries in a catch-up.
 
-// Page 1.
+// Catch-up 1.
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
   "from": "100", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
@@ -196,14 +196,13 @@ timelines:
   {"uri": "tickets/ticket-5", "effect": "updated",
    "previousRevision": "090", "revision": "102",    // as of "102", not "104"
    "patchMimeType": "application/merge-patch+json", "patch": {...}}],
- "hasMore": true, "moment": "105"}
-// The page brings each ticket as it stood at "102", its last entry's revision,
-// though ticket-5 has changed since. X applies the page, and its moment
-// becomes "102".
+ "hasMore": true, "moment": "102"}
+// A stopped at "102", so it brings each ticket as it stood then, though
+// ticket-5 has changed since. X applies it, and its moment becomes "102".
 
 // Meanwhile ticket-3 changes again, at "106".
 
-// Page 2 is an ordinary catch-up from X's new moment.
+// Catch-up 2 is an ordinary catch-up from X's new moment.
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
   "from": "102", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
@@ -213,11 +212,11 @@ timelines:
   {"uri": "tickets/ticket-5", "effect": "updated",
    "previousRevision": "102", "revision": "104",
    "patchMimeType": "application/merge-patch+json", "patch": {...}}],
- "hasMore": true, "moment": "106"}
-// X holds ticket-5 at "102" from page 1, so X applies the patch.
+ "hasMore": true, "moment": "104"}
+// X holds ticket-5 at "102" from catch-up 1, so X applies the patch.
 // X's moment becomes "104".
 
-// Page 3.
+// Catch-up 3.
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
   "from": "104", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
@@ -227,15 +226,15 @@ timelines:
    "previousRevision": "103", "revision": "106",
    "patchMimeType": "application/merge-patch+json", "patch": {...}}],
  "hasMore": false, "moment": "106"}
-// X holds ticket-3 at "103" from page 2, so X applies the patch.
+// X holds ticket-3 at "103" from catch-up 2, so X applies the patch.
 // X's moment for tickets/{id} becomes "106".
 ```
 
-- **R14.** A long catch-up comes back in pages. Every result carries `hasMore`, as SEP-3415's poll mode does, and `moment`, the timeline's moment as the page was read. A page holds the changes after `from` up to a moment the server picks, never splitting the changes at one moment across two pages. It brings each resource they touched once, as it stood at that moment, in order of `revision`, so the last entry's `revision` is that moment. While `hasMore` is true, the client applies the page, takes that `revision` as its moment, and catches up again from it at once, without waiting `ttlMs`, as SEP-3415's poll mode ignores `nextPollMs`. So each page is an ordinary catch-up. The `moment` of the page with `hasMore` false becomes the client's moment. A page may run past the server's usual size to finish a moment. A server that can't send one moment's changes in a single result answers `InvalidParams` (`-32602`) with `data.reason` `"momentTooLarge"`, and the client starts over (R23), since a collection read pages freely and the catch-up after it starts past that moment.
-  - Each page leaves the client's copies as they stood at its new moment, so the next page's patches start where the copies are. A database's read replica follows its primary the same way: it applies the primary's log of changes in order, as MongoDB's secondaries apply its oplog, and wherever it stops, it holds the data as it stood at the last change it applied, only behind. A catch-up differs in sending revisions, each resource as it stood, rather than the operations that made them.
-  - A resource whose changes span pages comes once on each, as ticket-5 does, so its `contents`, when sent, travel more than once. A catch-up that fits on one page brings each resource once, at its newest moment.
-  - Kubernetes reads every page of a list from one snapshot, so its `continue` token expires, after five minutes by default. Each page here is an ordinary catch-up, so it expires only as any `from` does (R21).
-- **R19.** Each entry in `changes` is one resource's change from `from` to the `revision` of the page's last entry (R14): the strawman's change-set entry, with contents added. `previousRevision` is the resource's moment at `from`, absent if it did not exist then. `effect` is `deleted` if the change ends with the resource gone, else `created` if it did not exist at `from`, else `updated`. A non-deletion carries `contents`, one `TextResourceContents` or `BlobResourceContents`, or a `patch` from the contents at `previousRevision`, with its `patchMimeType`, in a listed format that applies. A merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) applies to one `application/json` text entry, and patches its parsed `text`. JSON-based patches travel as JSON, others as strings. The server sends `contents` when no listed format applies, when there is no `previousRevision`, or when it no longer keeps those contents, and MAY when `contents` is smaller.
+- **R14.** A server may stop a catch-up short of the timeline's moment, to keep its result small. Its `moment` is then where it stopped, never partway through one moment's changes, and `hasMore` is true, as in SEP-3415's poll mode. It may stop short with no changes, as after scanning many changes to another collection on a shared timeline. The client applies the changes, and its moment becomes `moment`. While `hasMore` is true, it catches up again at once, without waiting `ttlMs`, as SEP-3415's poll mode ignores `nextPollMs`. A catch-up may run past the server's usual size to finish a moment. A server that can't send one moment's changes in a single result answers `InvalidParams` (`-32602`) with `data.reason` `"momentTooLarge"`, and the client starts over (R23), since a collection read pages freely and the catch-up after it starts past that moment.
+  - Each catch-up leaves the client's copies as they stood at its `moment`, so the next one's patches start where the copies are. A database's read replica follows its primary the same way: it applies the primary's log of changes in order, as MongoDB's secondaries apply its oplog, and wherever it stops, it holds the data as it stood at the last change it applied, only behind. A catch-up differs in sending revisions, each resource as it stood, rather than the operations that made them.
+  - A resource changed on both sides of a catch-up's `moment` comes in that catch-up and the next, as ticket-5 does, so its `contents`, when sent, travel more than once. A catch-up that reaches the timeline's moment brings each resource once, at its newest moment.
+  - Kubernetes reads every page of a list from one snapshot, so its `continue` token expires, after five minutes by default. A catch-up that stops short needs no snapshot, since the next is an ordinary catch-up, which expires only as any `from` does (R21).
+- **R19.** Each entry in `changes` is one resource's change from `from` to the catch-up's `moment` (R13): the strawman's change-set entry, with contents added. `previousRevision` is the resource's moment at `from`, absent if it did not exist then. `effect` is `deleted` if the change ends with the resource gone, else `created` if it did not exist at `from`, else `updated`. A non-deletion carries `contents`, one `TextResourceContents` or `BlobResourceContents`, or a `patch` from the contents at `previousRevision`, with its `patchMimeType`, in a listed format that applies. A merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) applies to one `application/json` text entry, and patches its parsed `text`. JSON-based patches travel as JSON, others as strings. The server sends `contents` when no listed format applies, when there is no `previousRevision`, or when it no longer keeps those contents, and MAY when `contents` is smaller.
   - A client applies a patch only to a copy at its `previousRevision`, and otherwise reads the resource (D2). If that read fails, or returns a moment earlier than the entry's `revision`, the client's moment stays put, and it catches up again.
 
 ### Less common cases, most likely first
@@ -267,19 +266,19 @@ A -> X   reply: ticket-3 at "109"              earlier than "111", so ignored
 ```
 
 - **R15.** A write's reply, a catch-up's entry or a tombstone changes a copy only when its moment is later than the copy's, and a client's moment for a uri-specification only moves forward, so messages may arrive in any order.
-- **R16.** A client runs one catch-up or collection read per uri-specification at a time. An event that arrives meanwhile waits, and once every page has landed, the client applies R11 to it.
+- **R16.** A client runs one catch-up or collection read per uri-specification at a time, counting the catch-ups that follow while `hasMore` is true as one. An event that arrives meanwhile waits until they end, and the client then applies R11 to it.
 
 **Missed events.**
 
 - **R12.** A client SHOULD catch up on each uri-specification it subscribed to whenever it may have missed events: after each SEP-3415 refresh, on reconnecting to its gateway or a `subscriptions/listen` stream, on starting, and on a `gap` envelope. A subscription with no expiry still gets SEP-3415's occasional refresh.
 
-**Starting over.** A client whose moment is too old (R21), or whose catch-up meets a moment too large for one page (R14), reads the collection again, as a new client does (R18).
+**Starting over.** A client whose moment is too old (R21), or whose catch-up meets a moment too large for one result (R14), reads the collection again, as a new client does (R18).
 
-- **R23.** A client that held copies before reading a collection drops each copy that neither the pages nor the catch-up after them named, if the copy's moment is at or before that catch-up's `moment`.
+- **R23.** A client that held copies before reading a collection drops each copy that neither the read's pages nor the catch-ups after them named, if the copy's moment is at or before the last catch-up's `moment`.
 
 **A moment too old to answer from.**
 
-- **R21.** A server keeps the moment of every change, deletions included, back to a moment of its choosing, and may drop old contents at any time. R19 then sends `contents`, and a change whose contents are gone comes with the resource's next change, since no page can bring the resource as it stood then (R14). A catch-up whose `from` is earlier than that, or later than the timeline's moment, as after a restore from a backup, gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (R23, D4). A server SHOULD keep that history longer than a read of its largest collection takes, or a client that reads it could not catch up after.
+- **R21.** A server keeps the moment of every change, deletions included, back to a moment of its choosing, and may drop old contents at any time. R19 then sends `contents`, and a change whose contents are gone comes with the resource's next change, since no catch-up can bring the resource as it stood then (R13). A catch-up whose `from` is earlier than that, or later than the timeline's moment, as after a restore from a backup, gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (R23, D4). A server SHOULD keep that history longer than a read of its largest collection takes, or a client that reads it could not catch up after.
 
 **Resources a client may not read.** Q6 asks what a client sees of them.
 
@@ -315,8 +314,8 @@ Nothing is built here yet. The first flavor built a prototype on a Cloudflare Wo
 - **Adapted:**
   - `src/server-role/deliveries.ts` drops what served deliveries carrying state (`Message.version`, `heldBefore`, `rebuild`), and keys each event's slot by subscription and uri, so its rule that a newer message replaces an older one does R10's replacing.
   - `src/server-role/events.ts` gains `{uriTemplate}`, the change-set entry and R10's `eventId`, and loses its folder walk. `uri-templates.ts` drops its rule for folders.
-  - `src/server-role/version-store.ts` becomes the timelines, with zero-padded moments, `asOf` for R19's `previousRevision`, and a prune that keeps moments back to the oldest moment it answers from (R21). Its `Versions` table already keeps every change with its contents, so `changedAfter`, which brings each resource at its newest, can bring each as it stood at a page's last moment instead (R14).
-  - `#catchUp` in `resource-webhooks.ts` becomes `resources/catchup`, paging by `from` rather than its cursor, and its path with no moment, `#listing`, becomes `resources/collection/read`, keeping its path order and its opaque cursor.
+  - `src/server-role/version-store.ts` becomes the timelines, with zero-padded moments, `asOf` for R19's `previousRevision`, and a prune that keeps moments back to the oldest moment it answers from (R21). Its `Versions` table already keeps every change with its contents, so `changedAfter`, which brings each resource at its newest, can bring each as it stood at a catch-up's `moment` instead (R13).
+  - `#catchUp` in `resource-webhooks.ts` becomes `resources/catchup`, with `from` and `hasMore` in place of its cursor, and its path with no moment, `#listing`, becomes `resources/collection/read`, keeping its path order and its opaque cursor.
   - `server-role.ts` swaps its tools `write_note` and `delete_note` for the strawman's four methods (D7).
   - The Wipe in `src/server.ts`, an operator control that empties A between tests, moves the oldest moment each timeline answers from up to its current one, so earlier moments get `momentExpired`.
   - `src/auth/` and `mcp-client.ts` move from DCR to Client ID Metadata Documents, with an anonymous account per browser, as the first flavor designed and did not build.
@@ -329,7 +328,7 @@ What this task adds, in build order:
 2. Timelines and moments, R1 to R5, with one counter for each timeline, which meets R6 trivially.
 3. The strawman's four methods (R7, R17). Closing a ticket also closes its note, and closing ticket-7 as a duplicate of ticket-9 also records it on ticket-9, each in one change, so R4 and R14 are tested through real writes.
 4. The extension's declaration and the event (R10, R20), with no `subscriptions/listen` stream.
-5. Reading a collection, subscribing, and the catch-up, paged (R13, R14, R18, R19, R21, R22, R23).
+5. Reading a collection, subscribing, and catching up, including catch-ups that stop short (R13, R14, R18, R19, R21, R22, R23).
 6. The client's rules (R8, R9, R11, R12, R15, R16).
 
 ## Constraints
@@ -374,9 +373,9 @@ IDs follow the order the decisions were recorded, not the order shown, and a gap
 | D10 | **(was Q5)** The prototype serves tickets and notes, on one timeline in the demo and on two in the tests, with zero-padded counters. (Larry, 2026-11-01) | ULIDs, which would exercise R6 but read badly in the demo. |
 | D11 | Patch formats are listed in `patchMimeTypes`, with `contents` for any entry no format fits (R19), as HTTP falls back for content codings ([RFC 9110 § 12.5.3](https://www.rfc-editor.org/rfc/rfc9110#section-12.5.3)) and deltas ([RFC 3229 § 5.2](https://www.rfc-editor.org/rfc/rfc3229#section-5.2)). (Claude, 2026-10-31; Larry confirmed, 2026-11-01) | A `form` parameter, which could only repeat or contradict the list, or an error, which costs a second request. |
 | D12 | A catch-up's result is core's `CacheableResult`, and a polling client waits its `ttlMs` (R13). (Claude, 2026-11-01, for Larry to confirm) | A field of our own, like SEP-3415's `nextPollMs`, saying what `ttlMs` says. |
-| D13 | A page brings each resource as it stood at its last entry's `revision`, and while `hasMore` is true, the client takes that `revision` as its moment and catches up again from it. So each page is an ordinary catch-up, as each poll is in SEP-3415, and every patch applies in order (R14). (Larry, 2026-11-02) | A page bringing each resource at its newest moment, sorted by its last change. A resource that changed on both sides of a page's end then came with a patch from a moment the client never held, so the client read it, and a busy resource cost a read on most catch-ups longer than a page. Or sending the first page's `from` again on every page, with a `cursor` saying where the last page stopped, which needs both fields on every page and a rule for which one a patch starts from. Or a fixed end sent back on every page, `through`, which kept a resource changed while the client paged out of later pages, at the cost of a field and a catch-up after the last page. |
+| D13 | A server may stop a catch-up short, with `hasMore` true and `moment` where it stopped, and brings each resource as it stood at that `moment` (R13, R14). The client's moment becomes `moment`, and it catches up again, so a long catch-up is a run of ordinary ones, as polls are in SEP-3415, and every patch applies in order. (Larry, 2026-11-02) | Taking the last entry's `revision` as the client's next moment, with `moment` the timeline's moment on every result, which gave `moment` two meanings and could not stop short with no changes. Pages bringing each resource at its newest moment, sorted by its last change. A resource that changed on both sides of a page's end then came with a patch from a moment the client never held, so the client read it, and a busy resource cost a read on most catch-ups longer than a page. Or sending the first page's `from` again on every page, with a `cursor` saying where the last page stopped, which needs both fields on every page and a rule for which one a patch starts from. Or a fixed end sent back on every page, `through`, which kept a resource changed while the client paged out of later pages, at the cost of a field and a catch-up after the last page. |
 | D14 | Starting over has its own method, `resources/collection/read`, which takes no `from` and pages with core's opaque `cursor` and `nextCursor`, as `resources/list` does (R22). A client reads the collection, subscribes, then catches up from the read's `moment` (R18), so every catch-up names `from`. (Larry, 2026-11-02) | A catch-up with no `from`, which gave one method two kinds of result, and needed a `cursor` beside `from` with an error for naming both. `resources/template/read`, which would need a sibling for uriGlobs and reads like fetching the template itself. SEP-2640's `resources/directory/read`, which lists one directory's children without their contents. Subscribing before reading, which also works, but leaves a new client's events waiting while it pages. |
-| D15 | A page never splits one moment's changes. It runs past the server's usual size to finish a moment, and a server that can't answers `momentTooLarge`, so the client starts over (R14). That page is never larger than a start-over, which sends every resource in the collection. (Larry, 2026-11-02) | Splitting a moment across pages, which would leave the client's copies matching no moment between them. Reusing `momentExpired`, which would tell a client its `from` had expired when it hadn't. |
+| D15 | A catch-up never stops partway through one moment's changes. It runs past the server's usual size to finish a moment, and a server that can't answers `momentTooLarge`, so the client starts over (R14). That result is never larger than a start-over, which sends every resource in the collection. (Larry, 2026-11-02) | Stopping partway through a moment, which would leave the client's copies matching no moment until the next catch-up. Reusing `momentExpired`, which would tell a client its `from` had expired when it hadn't. |
 
 ## Notes kept out of the proposal
 
