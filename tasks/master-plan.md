@@ -299,11 +299,11 @@ A -> X   reply: ticket-3 at "109"              earlier than "111", so ignored
 
 **Starting over.** A client caught up to a moment too old (R21), or whose catch-up meets a moment too large for one result (R14), reads the collection again, as a new client does (R18).
 
-- **R23.** A client that held copies before reading a collection drops each copy that neither the read's pages nor the catch-ups after them named, if the copy's revision is at or before the last catch-up's `nextFrom`.
+- **R23.** A client that held copies before reading a collection replaces each one the read's pages name, even with an earlier revision, and drops each one that neither the read's pages nor the catch-ups after them named, if its revision is at or before the last catch-up's `nextFrom`.
 
 **A moment too old to answer from.**
 
-- **R21.** A server keeps the moment of every change, deletions included, back to a moment of its choosing, and may drop old contents at any time. A catch-up whose `from` is earlier than that, or later than the timeline's latest moment, as after a restore from a backup, gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (R23, D4). A server SHOULD keep that history longer than a read of its largest collection takes, or a client that reads it could not catch up after.
+- **R21.** A server keeps the moment of every change, deletions included, back to a moment of its choosing, and may drop old contents at any time. A catch-up whose `from` is earlier than that gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (R23, D4). A server restored from a backup first mints a moment past every one it may have sent, and makes it the oldest it answers from, as etcd's `snapshot restore` does with `--bump-revision` and `--mark-compacted`. A server SHOULD keep that history longer than a read of its largest collection takes, or a client that reads it could not catch up after.
 
 **Resources a client may not read.** Q6 asks what a client sees of them.
 
