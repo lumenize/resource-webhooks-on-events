@@ -1,6 +1,6 @@
 # Resource webhooks on Events
 
-**Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 and 2026-11-03 with his decisions on paging, starting over, naming and the event (D13 to D19), and after a third Stage 1 pass on 2026-11-03, with his decisions on polling, restores, templates a server doesn't list, the event's id, a routing header, history and test layouts (D10, D12, D20 to D25). Phases are unwritten. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
+**Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 and 2026-11-03 with his decisions on paging, starting over, naming and the event (D13 to D19), and after a third Stage 1 pass on 2026-11-03, with his decisions on polling, restores, templates a server doesn't list, the event's id, a routing header, history and test layouts (D10, D12, D20 to D25). Pass 2's phases were written on 2026-11-03. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
 
 ## References
 
@@ -362,6 +362,7 @@ A uriGlob is a third kind of uri-specification. A glob is the familiar way to wr
 - **Gated by nothing outside this repo.** SEP-3415 and the strawman are drafts, so the build pins each at a commit.
 - **Mines `../resource-webhooks-standalone`,** as § *Current state* says.
 - **Gates** the proposal's PR to `../experimental-ext-triggers-events` with its Discord posts, a demo task file, and the reference implementation in the official TypeScript SDK. The posts go to this working group's channel and the Filesystems group's, where R7's MUST on `resources/read` is offered as a use case for that group's open question about it. The SDK work has a small risk: R7 needs `_meta` on each item of a `resources/read` result. In the TypeScript SDK a server's read callback returns that result, so the server can add it, but an extension package can't add it for the server, as the strawman's prototype found of the Python SDK's extensions.
+- **Supersedes the first flavor's `tasks/prototype-matches-the-proposal.md`** for this flavor, except its § *Registration by Client ID Metadata Document*, which Phase 2 builds. Its patch formats, folders and R58 give way to D11, D10 and D5.
 - **Before the proposal is shared,** the client claims in § *Why now?* and the quote from the skills group's decision log are checked again, since they date.
 
 ## Current state
@@ -385,16 +386,7 @@ Nothing is built here yet. The first flavor built a prototype on a Cloudflare Wo
 
 Every file that `git ls-files src scripts` lists in the first flavor, outside `src/vendor/mcp-spec/`, has a fate above.
 
-What this task adds, in build order:
-
-1. Registration by Client ID Metadata Document, since every request over MCP needs a token, as the first flavor's `tasks/prototype-matches-the-proposal.md` § *Registration by Client ID Metadata Document* designs it.
-2. Timelines and moments, R1 to R5, built from a timeline map that names each listed uri-specification's timeline, with R1 checked when the map loads, so a map that lists `{type}/{id}` on the split layout fails to load. Each timeline has one counter, which meets R6 trivially. A write groups the resources it touches by timeline, and commits each group as one atomic step. The Worker routes an endpoint to each of A's two instances (D10).
-3. The strawman's four methods (R7, R17). Closing a ticket also closes its note, and closing ticket-7 as a duplicate of ticket-9 also records it on ticket-9. Each is one atomic step on the shared map, while closing a ticket is two on the split one, one for each timeline, so R4 and R14 are tested through real writes.
-4. Reading a collection and catching up, including catch-ups that stop short (R13, R14, R19, R21, R22, R24), tested with plain requests, since a catch-up needs no subscription (D3).
-5. The extension's declaration, the event and subscribing (R10, R18, R20), with no `subscriptions/listen` stream. R10's test catches up as in step 4, since an event goes out once its change is visible to a catch-up.
-6. The client's rules (R8, R9, R11, R12, R15, R16, R23, and R18's order of read, subscribe and catch up).
-
-Each step adds its part of the extension's TypeScript types, in the spec's style, from which validation is generated. The tests run against both of A's instances, the shared map and the split one, and the few that fit only one layout run on it alone (D10).
+What this task adds is § *Phases*, in build order.
 
 ## What the proposal leaves to the build
 
@@ -422,7 +414,7 @@ Larry confirmed these on 2026-11-01:
 - **SEP-3415's machinery:** each MUST it covers stays tested, with the first flavor's tests.
 - **The strawman's methods:** the happy path and a conflicting write.
 - **Registration and the Wipe:** scaffolding, as far as the tests and the conformance suite's `auth/*` scenarios need. The anonymous account per browser gives each client its own principal, as SEP-3415's subscription key needs.
-- **Designed, not built:** several writers minting moments (R6), subscriptions granted no expiry, R12's trigger on a `subscriptions/listen` stream and the `deliveryStatus` its sub-bullet cites, uriGlob, and access that differs by resource (Q6).
+- **Designed, not built:** several writers minting moments (R6), subscriptions granted no expiry, R12's trigger on a `subscriptions/listen` stream and the `deliveryStatus` its sub-bullet cites, uriGlob, access that differs by resource (Q6), and a restore from a real backup, whose steps the Wipe takes in the tests (R21).
 
 ## Open questions
 
@@ -470,6 +462,158 @@ IDs follow the order the decisions were recorded, not the order shown, and a gap
 | D23 | Both methods carry `Mcp-Name` over Streamable HTTP, holding the `uri` or `uriTemplate` (R13, R22), as `resources/read` carries its `uri` and SEP-3415's methods their event's name, so a gateway can route a request by collection without parsing its body. (Larry, 2026-11-03) | No header, as the strawman's four methods and SEP-2640's `resources/directory/read` carry none, which leaves a gateway to parse each body to learn the collection. |
 | D24 | A server SHOULD keep history longer than the time it grants between refreshes (R21), so a quiet collection on a busy shared timeline costs no full read at each refresh, as SEP-3415's refresh keeps its cursor inside the upstream's retention window. (Larry, 2026-11-03) | Answering from before the oldest moment when nothing in the collection changed, which works only for collections whose last change the server tracks. Bounding history by a read's length alone, which leaves such a collection re-read at every refresh. |
 | D25 | R7 keeps its MUST that a `resources/read` result carry each item's revision in `_meta`, so a copy a client got from a core read, as a skills client gets `SKILL.md`, can be compared without reading it again. It binds only servers that declare this extension, and gives the strawman's open question about `resources/read` a use case. (Larry, 2026-11-03) | R19's fallback reading through `resources/collection/read` alone, which needs no hook into core's read, but leaves copies from core reads without a revision. A SHOULD, as the strawman's "when the server can provide it", which gives R19 two routes. |
+
+## Phases
+
+Each phase is a goal with criteria that can fail, built in the order shown. A phase is done when its criteria pass, `npm test`, `npm run type-check` and `npm run check:schema` are green, and each new test has been mutation-checked, as the phase's mutation notes say. It is then committed by explicit path. Four things hold across every phase:
+
+- **A file from the first flavor comes in only in the phase its fate names,** re-read as it comes, with its tests. A test whose subject is a left-behind part never comes in.
+- **A test that proves a rule names it in its title,** such as `it('R13: brings a deleted resource as a tombstone', ...)`, so `grep -rhow 'R[0-9][0-9]*:' test/` lists the rules the suite proves.
+- **Each lane test that doesn't depend on the layout runs against both of A's instances,** through `describe.each` over `A` and `A-split`, from Phase 3 on. A test that needs one layout names it.
+- **Each phase adds its part of the extension's TypeScript types** to `src/extension-types.ts`, in the spec's style. `scripts/generate-schemas.mjs` generates the schema that `src/server-role/validation.ts` reads, so `npm run check:schema` fails when the two differ.
+
+### Phase 1: The carried skeleton runs
+
+**Goal.** The first flavor's carried parts run here, with A serving MCP's core over the edge and nothing of the extension yet, so each later phase adds to a green tree.
+
+**What comes in.** Everything § *Current state* carries, and the root's `package.json`, `package-lock.json`, `wrangler.jsonc`, `wrangler.conformance.jsonc`, `vitest.config.ts`, `tsconfig.json`, `.nvmrc`, `.dev.vars.example` and `conformance-baseline.yml`, named for this repo. The page's build, `tsconfig.page.json` and `public/`, stays behind with the demo page. The carried code needs three changes to stand alone. `src/server.ts` and `src/mcp-http.ts` lose their imports of left-behind files. `src/server-role/server-role.ts` comes in reduced to MCP's lifecycle, `resources/list` and `resources/templates/list`, with no resources yet, no tools and no events. And the Wipe keeps a count of Wipes in A's storage, which `Claims.epoch` and the registration cap read in place of `VersionStore.epoch()`.
+
+**Success criteria (capable of failing).**
+
+- Each first-flavor test whose subject is only carried code comes across and passes, changed only where a dropped import forces it, such as `test/lane/standard-webhooks.test.ts` and `test/lane/edge.test.ts`.
+- `git ls-files src scripts` lists every carried file and no left-behind one, checked against § *Current state*'s fates.
+- A token issued before a Wipe is refused after it: a test signs in, Wipes A, and the token's next MCP request gets `401`.
+
+**Mutation notes.** The carried tests keep the first flavor's mutation checks, and one per carried file is run again here. A Wipe that leaves its count alone turns the token test red.
+
+### Phase 2: A client registers by Client ID Metadata Document
+
+**Goal.** Registration as MCP 2026-07-28 prefers, so every later test signs in the way the spec asks. It builds the first flavor's design, `tasks/prototype-matches-the-proposal.md` § *Registration by Client ID Metadata Document*, items 1 to 7, with "per epoch" read as per Wipe.
+
+**What comes in.** `src/auth/` and `src/client/mcp-client.ts`, adapted, with `test/lane/authorization.test.ts` and `test/lane/oauth-client.test.ts`.
+
+**Success criteria (capable of failing).**
+
+- A's authorization server metadata has `client_id_metadata_document_supported: true` and no `registration_endpoint`.
+- A refuses an authorization request whose document's `client_id` differs from the document's URL, and one whose `redirect_uri` the document doesn't list, each in a test of its own, and accepts a request that matches.
+- Two grants from one browser, the test client keeping A's cookie between them, bring back the same `sub`. A grant without the cookie brings a new one.
+- After `REGISTRATION_CAP` new browsers since a Wipe, the next is refused, and after a Wipe one more is accepted.
+- The client suite's `auth/basic-cimd:cimd-client-id-used` passes and leaves `conformance-baseline.yml`.
+
+**Mutation notes.** Dropping the `client_id` comparison, dropping the `redirect_uri` check, minting a new account on every grant, or counting accounts across Wipes each turns its own test red.
+
+### Phase 3: Every write lands at a moment on its timeline
+
+**Goal.** The strawman's four methods write tickets and notes onto timelines built from a map, so every change has a moment and every resource a revision (R1 to R5, R7, R17, D10).
+
+**What comes in.** `src/server-role/version-store.ts`, `src/server-role/uri-templates.ts` and `src/resource-types.ts`, adapted as § *Current state* says, and `src/server-role/server-role.ts` gains the four methods.
+
+**How it works.**
+
+- **Two instances.** The edge routes `/server/A` and `/server/A-split`, and each instance takes its timeline map from its name. `A` has the shared map, with `{type}/{id}`, which the demo will use, and `A-split` the split one. Both list `tickets/{id}` and `notes/{id}`.
+- **R1 when the map loads.** Two listed uri-specifications, one of which covers the other by R24's check, must name the same timeline, or the map fails to load. The check sees containment only, not two templates that overlap without either containing the other, since neither map has such a pair.
+- **One write path.** A write groups the resources it touches by timeline, and commits each group as one atomic step: it mints the moment after the timeline's latest, checks it is later, and commits the rows and the new latest, with nothing awaited in between (R5).
+- **Tickets and the cascade.** A ticket is `{"title", "status": "open" | "closed", "duplicateOf"?}`, and its note is the `Note` at `notes/` and the ticket's id. An update that closes a ticket sets its note's `done`, and one that sets `duplicateOf: "ticket-9"` on ticket-7 also adds `"ticket-7"` to ticket-9's `duplicates`.
+- **The Wipe** mints one moment past each timeline's latest, and makes it both the latest and the oldest moment that timeline answers from.
+
+**Success criteria (capable of failing).**
+
+- R1: the split map with `{type}/{id}` added fails to load, naming both uri-specifications, and the shared map loads.
+- R2 and R3: a create, an update and a delete each get a moment later in byte order than the timeline's latest before it, at the counter's fixed width, and the latest becomes it.
+- R4: closing ticket-7 as a duplicate of ticket-9 gives both one moment on either instance. Closing a ticket gives it and its note one moment on `A`, and two on `A-split`, one on each timeline. The write's result lists both entries.
+- R5: twenty writes sent to one timeline at once get twenty distinct moments, the twenty after the latest before them, and each resource's revision is the moment of its last write.
+- R7: a write's and `resources/stat`'s `revision` is the change's moment, a stale `ifMatch` gets `revisionMismatch`, and each `resources/read` item carries the revision in `_meta` under `io.modelcontextprotocol/resource-revision`.
+- R17: a `resources/read` after an update returns the text sent, byte for byte, whitespace included.
+- The Wipe leaves each timeline's latest and oldest moment equal, and later than every moment before it. Phase 4 tests what a client then sees.
+
+**Mutation notes.** Skipping the load check turns R1's test red. Minting one moment per resource rather than per group turns R4's tests red, and committing the note apart from its ticket on `A` turns the shared map's. Putting an `await` between reading the latest and committing lets two writes take one moment, which turns R5's test red. Minting revisions as digests, which the strawman allows, turns R7's test red. Storing parsed and reserialized JSON turns R17's test red.
+
+### Phase 4: A client reads a collection and catches up
+
+**Goal.** Plain requests read a collection and catch up on it, with no subscription (R13, R21, R22, R24, D3, D12, D23). The extension is declared in `capabilities.extensions` from here, and Phase 6 adds its event.
+
+**What comes in.** `#listing` in `src/server-role/resource-webhooks.ts` becomes `resources/collection/read`, and `#catchUp` becomes `resources/collection/catchup`, as § *Current state* says. `src/mcp-http.ts` takes `Mcp-Name` for both from `uri` or `uriTemplate`.
+
+**Success criteria (capable of failing).**
+
+- R22: a read of `tickets/{id}` brings every ticket with its revision in `_meta`, and `nextFrom` equal to the timeline's latest. In `lane-paged`, every page repeats the first page's `nextFrom`, a ticket that doesn't change while the client pages comes exactly once, and one created between pages comes in the catch-up after. The result carries core's `ttlMs` and `cacheScope`.
+- R13: a catch-up from a moment brings each covered resource changed after it, a deleted one as a tombstone, a resource changed twice once, and nothing for one unchanged. With `hasMore` false its `nextFrom` is the timeline's latest. The result has `nextPollMs` and no `ttlMs`.
+- R13's errors: a uri that nothing listed covers gets `InvalidParams` with `data.reason` `"notFound"`, and a catch-up with no `from` gets `InvalidParams`. A request whose `Mcp-Name` is missing or differs from its `uri` or `uriTemplate` gets `400` with `HeaderMismatch`.
+- R24: on `A`, a catch-up and a read naming `tickets/ticket-{n}`, which no map lists, are answered, since `tickets/{id}` covers it, and `tickets/{+rest}` gets `notFound`. On `A-split`, `{type}/{id}` gets `notFound`, since no one listed template covers it.
+- R21: after the Wipe, a catch-up from the old latest gets `momentExpired`, and one from the new latest is answered. Once the history window has passed a moment, a catch-up from before it gets `momentExpired`, and one from the oldest moment answered is answered. R21's restore sentence is tested through the Wipe, which takes its steps. A restore from a real backup is not built.
+- R21's SHOULD: a harness test reads `wrangler.jsonc` and checks that `CUTOFF_WINDOW_MS` is longer than `SUBSCRIPTION_TTL_MS`.
+
+**Mutation notes.** Reading `nextFrom` after the pages turns R22's paging test red. Dropping deletions from `changes` turns R13's tombstone test red. Accepting every template, or refusing every unlisted one, turns one of R24's tests red. Comparing `from` with the oldest moment by `<=` in place of `<` turns R21's boundary test red. Leaving the two methods out of `mcp-http.ts`'s table turns the header test red.
+
+### Phase 5: Catch-ups bring patches, and stop short when long
+
+**Goal.** A catch-up sends patches where a listed format applies, and splits a long run of changes into ordinary catch-ups that never split a moment (R14, R19, D11, D13, D15).
+
+**Success criteria (capable of failing).**
+
+- R19: a catch-up listing `application/merge-patch+json` brings an update to a ticket as a merge patch from `previousRevision`, which applied to the ticket at that revision gives the server's contents. A created ticket comes as `contents`, and so does every entry of a catch-up listing no format, and an entry whose `previousRevision`'s contents the store no longer keeps.
+- R14 and R13: in `lane-paged`, a catch-up over three changes stops short with `hasMore` true and `nextFrom` where it stopped, and the next one from that `nextFrom` brings the rest. Ticket-5, changed on both sides of the stop, comes in both, as it stood at each `nextFrom`, and the two patches apply in order, as R14's example says.
+- D15: with a page of one, the cascade's two entries come in one result. With `MOMENT_CHANGE_CAP` below two, a lane binding, the catch-up gets `InvalidParams` with `data.reason` `"momentTooLarge"`.
+- R14: on `A`, after more note changes than `SCAN_LIMIT`, a lane binding, allows one catch-up to scan, a catch-up on `tickets/{id}` stops short with no changes, `hasMore` true and `nextFrom` moved on.
+- R13 and R21's note below the line: once the store has dropped the contents of a ticket's middle revision, a catch-up stops short only where every covered resource changed since `from` still has its contents.
+
+**Mutation notes.** Patching from the ticket's latest revision rather than `previousRevision` turns R19's test red. Stopping partway through a moment turns D15's first test red. Bringing each resource at its newest rather than as of `nextFrom` turns the ticket-5 test red.
+
+### Phase 6: The extension declares its event and sends it
+
+**Goal.** A subscription made with `events/subscribe` hears of each change it covers by webhook, in one event per change (R10, R18 on the server, R20, D19, D22).
+
+**What comes in.** `src/server-role/events.ts`, `subscriptions.ts` and `deliveries.ts`, adapted as § *Current state* says, with `test/lane/deliveries.test.ts` and `test/lane/eviction.test.ts`, adapted.
+
+**Success criteria (capable of failing).**
+
+- R20: `capabilities.extensions` has `io.modelcontextprotocol/resource-webhooks`, and `events/list` lists `mcp.resource.collection.updated` with `["webhook"]` delivery and an `inputSchema` taking exactly one of `uri` and `uriTemplate`.
+- R18 on the server: `events/subscribe` naming `{"uriTemplate": "tickets/{id}"}` is accepted. One naming a uri-specification a catch-up would refuse gets the same `notFound`, and one asking for poll or push gets `Unsupported`.
+- R10: one change sends one POST, through B, to each subscription that covers it. Its `data` repeats the subscription's `arguments` and holds the covered entries, each with `revision`. Its `eventId` is the moment, its `timestamp` is ISO 8601 to the millisecond, and its `cursor` is null.
+- R10 on `A`: closing a ticket sends a `{type}/{id}` subscription one event listing the ticket and its note, and a `tickets/{id}` subscription one listing the ticket alone.
+- R10's size limit: with `EVENT_BODY_LIMIT`, a lane binding, below the entries' size, the event leaves `changes` out.
+- R10's merge: with B's hook stalled, a first event's POST fails, the writer writes again, and the event that goes next lists both changes, under a `webhook-id` of its own and the newer moment as `eventId`.
+- R10's order: a catch-up made when an event arrives brings the change the event names.
+
+**Mutation notes.** Sending one event per resource gives the `{type}/{id}` subscription two POSTs. Merging only a waiting event, not the one in flight, turns the stalled-hook test red, and so does reusing the older `webhook-id`. Building `eventId` from the moment and the uri-specification turns the `eventId` assertion red. Dropping the size check turns the size test red.
+
+### Phase 7: The client keeps its copies by the rules
+
+**Goal.** The client in `src/client/copies.ts`, rewritten, keeps its copies current by the client's rules, against real A and B (R8, R9, R11, R12, R15, R16, R18, R19, R23).
+
+**Success criteria (capable of failing).**
+
+- R18: a new client reads, subscribes and catches up, in that order. A change a test makes between the read and the subscription reaches the client through the catch-up.
+- R11: a writer whose copies hold every uri an event lists, at its revision, skips the catch-up, and a client that doesn't catches up. An event with no `changes` always brings a catch-up.
+- R9: on `A`, a client that closes a ticket sets its copy of the ticket from the reply, keeps its copy of the note at the old revision until a catch-up brings the new one, and stays caught up to the moment before its write.
+- R15: the messages of § *Messages that cross*, fed in the order shown, leave the client holding ticket-3's tombstone, with the late reply ignored.
+- R16: an event that arrives during a catch-up waits until the catch-up ends, then R11 applies to it.
+- R19 on the client: a patch whose `previousRevision` differs from the copy's revision brings a `resources/read` of the resource, and when that read fails the client stays caught up to its `from`.
+- R12: the client catches up after a refresh, on reconnecting to B, on starting, and on a `gap` envelope a test signs and posts through B.
+- R23: a client starting over replaces each copy the read's pages name, even with an earlier revision, and drops each copy in that collection that nothing named, if its revision is at or before the last catch-up's `nextFrom`. Its copies of another collection stay.
+- R8 and its note below the line: on `A`, a client that catches up on `{type}/{id}` and `tickets/{id}` is caught up on `tickets/{id}` to at least each `nextFrom` it gets for `{type}/{id}`, so its next catch-up on `tickets/{id}` starts there.
+
+**Mutation notes.** Each criterion names its rule, and the mutation is the rule's opposite: catching up on every event, setting the note's copy from the reply, taking the late reply, applying an event during a catch-up, patching a copy at another revision, ignoring the `gap` envelope, keeping the unnamed copy, and catching up on the narrower from its own moment.
+
+### Phase 8: The deployed tier, the suites, and nothing left over
+
+**Goal.** What holds only on Cloudflare is shown on Cloudflare, the conformance suites pass, and nothing the design replaced survives beside it.
+
+**Success criteria (capable of failing).**
+
+- `scripts/deployed.mjs` deploys the Worker and runs `test/deployed/`, which takes § *A simple happy path* end to end against both instances. `test/deployed/ssrf.test.ts`, extended to the document fetch, shows that a webhook URL and a client ID metadata document at a private address are both refused by the Worker's egress.
+- `npm run conformance` and `npm run conformance:client` pass against `conformance-baseline.yml`, and each of its entries says why. A offers no tools now, so each tool scenario that then fails joins the baseline, with that reason.
+- Every rule R1 to R24 but R6 is named by at least one test title, which a harness test checks from `grep -rhow 'R[0-9][0-9]*:' test/`. The check is first run with one title's rule ID removed, to show it can fail.
+- Nothing replaced survives: `src/` holds no `resources/webhooks/` method, no `'mcp.resource.updated'` name, no `src/server-role/targets.ts` and no `src/notes-http.ts`.
+
+**Mutation notes.** Removing one rule's only title turns the coverage check red. A webhook URL at `10.0.0.1` reaching its receiver would turn the SSRF test red.
+
+## Non-goals
+
+- **Everything § *How far each part is hardened* lists as designed, not built.**
+- **The demo page,** which the demo's own task file builds on `A`'s shared map.
+- **Plain HTTP access to resources** (D8), and tools.
+- **The reference implementation in the official TypeScript SDK,** which § *Relationships* says this gates.
 
 ## Notes kept out of the proposal
 
