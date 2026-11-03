@@ -533,7 +533,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - **The layouts.** An instance takes its timeline map from its name's prefix: `A-split…` the split map, any other name the shared map, with `{type}/{id}`. Both list `tickets/{id}` and `notes/{id}`. The deployed Worker serves `A` alone, on the shared map the demo uses, and the edge, the authorization server and the token's audience stay single-instance, as the first flavor built them.
 - **R1 when the map loads.** Two listed uri-specifications may name different timelines only when their literal text up to the first expression differs and neither is a prefix of the other. Any other pair must name the same timeline, or the map fails to load.
 - **One write, one transaction.** A whole write, every group of it, runs in one `ctx.storage.transactionSync`, so a refusal partway rolls every row back. Within it, the write groups the resources it touches by timeline, and for each group mints the moment after the timeline's latest and commits the rows and the new latest at it (R5). The write's events are enqueued only after the transaction returns. The role takes `transactionSync` as an option, as it takes `sql`, since `build-checks` keeps role modules away from `DurableObjectState`.
-- **Tickets and the cascade.** A ticket is `{"title", "status": "open" | "closed", "duplicateOf"?, "duplicates"?}`, and its note is the `Note` at `notes/` and the ticket's id. An update that closes a ticket sets its note's `done`, and one that sets `duplicateOf: "ticket-9"` on ticket-7 also adds `"ticket-7"` to ticket-9's `duplicates`.
+- **Tickets and the cascade.** A ticket is `{"title", "status": "open" | "closed", "duplicateOf"?, "duplicatedBy"?}`, and its note is the `Note` at `notes/` and the ticket's id. An update that closes a ticket sets its note's `done`, and one that sets `duplicateOf: "ticket-9"` on ticket-7 also adds `"ticket-7"` to ticket-9's `duplicatedBy`.
 - **Bounds.** A created uri is at most 2 KiB, and a ticket's or a note's contents at most 16 KiB on create and update, each refused past that with `InvalidParams`.
 - **The two prunes.** Past `CUTOFF_WINDOW_MS`, a superseded row's contents are dropped and its moment kept. Past it too, a tombstone goes, with every row before it, and the oldest moment its timeline answers from rises to the newest dropped tombstone's moment, as the first flavor's `Horizon` does. Every other row's moment stays while it is the resource's newest at or before that oldest moment.
 - **The Wipe** mints one moment past each timeline's latest, and makes it both the latest and the oldest moment that timeline answers from.
@@ -657,7 +657,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 Writing and reviewing the phases named a few things the proposal and § *Decisions* don't, and these are his:
 
-- **New names:** the ticket fields `duplicateOf` and `duplicates`, and `scripts/check-deploy-bundle.mjs`, which § *Current state* now carries under that name.
+- **New names:** `scripts/check-deploy-bundle.mjs`, which § *Current state* now carries under that name.
 
 ## Non-goals
 
