@@ -663,11 +663,33 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 ## Build notes
 
+### Open after the build
+
+Every phase conformed once its verifier's findings were fixed, and no phase failed verification. Two decisions remain for Larry, and the residuals after them are ordered by what depends on what, then by risk. Each phase's notes below keep the record they came from.
+
+**Decisions for Larry:**
+
+1. **R4 and a write that spans timelines.** R4 says one atomic step gives the resources it touches one moment, "so resources that can change together share a timeline". On the split layout, closing a ticket closes its note in one transaction at two moments, one on each timeline, as D10's "committing once per timeline" asks. D10 rejects testing the split layout alone because it "can't … close a ticket and its note in one step", which reads one step as one moment. The build follows D10. Whether R4 needs a clause for one transaction across timelines is Larry's call (Phase 3's verifier).
+2. **The new names.** Each phase's *For Larry* lists the names it brought. A reader outside this repo meets B's hook message, `{"type": "hook", "hookUrl"}`, the account cookie `rw_account`, the `u_` and `i_` prefixes, A's back-channel `document` report, and the types in `src/extension-types.ts`. The rest are constants and code names, among them `REGISTRATION_CAP`, which now caps accounts, and `SOCKETS_PER_SUBJECT`.
+
+**Residuals:**
+
+1. **A's history grows until a tombstone goes.** A superseded row loses its contents past the cut-off window, but rows go only once a tombstone past the window raises its timeline's oldest moment (Phase 3). Until then each write's prunes read every row, and a read's query passes over every superseded row it doesn't count (Phase 4). A catch-up that keeps a row whose contents are lost runs past every limit, at a cost that grows as the square of the rows it keeps (Phase 5), and every write works out each subscription's coverage again (Phase 6). None of it shows at the demo's size.
+2. **A socket token from before a Wipe of A still opens a socket on B**, since B never reads A's Wipe count. A's Wipe refuses every earlier MCP token, and B's own Wipe closes every socket (Phases 1 and 2).
+3. **A treats every client as public**, whatever `token_endpoint_auth_method` its document declares, and ignores a `client_secret` sent to the token endpoint (Phase 2).
+4. **A's open back channel reports each document fetch's status and error code**, so anyone can learn the status of a public https URL through A. The back channel is the demo's, and stays open for it (Phase 2's verifier).
+5. **The cascade forgets on a change and on a delete.** Changing a ticket's `duplicateOf` leaves the earlier ticket's `duplicatedBy` naming it. A delete runs no cascade, so a deleted ticket's note stays, as does a mention of it in another ticket's `duplicatedBy` (Phase 3).
+6. **A uri the request schema refuses as malformed gets `-32602` with the schema's errors as `data`**, where the strawman's refusal carries `invalidUri` (Phase 3's verifier).
+7. **A lapsed subscription's row stays until A next starts**, and gets no event meanwhile, as in the first flavor (Phase 6).
+8. **A read whose timeline is wiped between its pages runs on**, and the catch-up after it gets `momentExpired`, which R21 answers by starting over (Phase 4).
+9. **R19's test asserts that the client stays at `from` after a patch it can't apply**, and no mutation turns that assertion red alone (Phase 7's verifier).
+10. **`npm test -- <filter>` hands the filter to the coverage check**, not to vitest, so the whole suite runs and the filter is ignored. Run one file with `npx vitest run --project <project> <file>` (Phase 8's verifier).
+11. **`conformance-baseline.yml` still lists `tools-call-with-progress`**, carried from the first flavor in Phase 1 with its reason (Phase 8's verifier).
+
 ### Phase 1
 
-**For Larry.** Nothing needs a decision. Four things differ from the phase as written, none of them a design change:
+**For Larry.** Nothing needs a decision. Three things differ from the phase as written, none of them a design change:
 
-- `src/server-role/deliveries.ts` waits for Phase 6, since A sends nothing until then and `src/server.ts` no longer builds a `send`, and the phase text now says so.
 - B's event-free tests went into `test/lane/gateway.test.ts`, with the page controls' event-free tests beside them (the greeting, the refusals, and B's Wipe closing every socket).
 - Without a host's tools, A serves no `tools/*` method at all, not only no `tools` declaration, so `tools/list` answers `-32601` there.
 - `src/mcp-http.ts` and `src/client/mcp-client.ts` came in with their `resources/webhooks/*` entries already dropped.
@@ -716,8 +738,6 @@ Three things differ from the phase as written, none a design change, and the pha
 Residuals to know of:
 
 - A treats every client as public, whatever `token_endpoint_auth_method` its document declares, and ignores a `client_secret` sent to the token endpoint.
-- The document fetch parses Cloudflare's error code with the same pattern the first flavor's delivery `send` used. Phase 6 brings `send` back, and should share one helper with it.
-- A socket token from before a Wipe of A still opens a socket on B, as Phase 1 recorded.
 
 **Retro.**
 
@@ -807,9 +827,8 @@ Residuals the verifier named:
 
 - A uri the request schema refuses as malformed gets `-32602` with the schema's errors as `data`, not the strawman's `invalidUri`.
 - The prunes read every row on each write. Until a tombstone is dropped, the oldest moment stays at zero, so no row goes, and the read grows with every change.
-- `asOf` and `changedAfter`, which § *Current state* lists with the store's adaptation, came in with Phase 4, the first phase to read them.
 
-**For Larry, from the verifier.** R4 says one atomic step gives the resources it touches one moment, "so resources that can change together share a timeline". On the split layout, closing a ticket closes its note in one transaction at two moments, one on each timeline, as Phase 3's criterion and D10's "committing once per timeline" ask. D10's rejected alternative, though, says the split layout "can't … close a ticket and its note in one step". The build follows D10. Whether R4 needs a clause for a write that spans timelines is your call, and it is teed up when the build ends.
+**For Larry, from the verifier.** R4 and the split layout's write across two timelines, now the first decision in § *Open after the build*.
 
 **Close-out.** The suite is 292 tests in 17 files, all passing, and both conformance suites pass. Phase 2's verifier findings are fixed here. The R21 prunes are built and wait for Phase 4's tests.
 
@@ -823,7 +842,6 @@ Residuals the verifier named:
 
 What differs from the phase as written:
 
-- A catch-up always runs to the timeline's latest moment here. Stopping one short needs it to bring each resource as it stood where it stopped, which Phase 5 builds and tests, so the phase text now says the stop lands there.
 - A read starts its scan at the literal text its uri-specification begins with, as `tickets/` for `tickets/{id}`, so the rows `SCAN_LIMIT` counts are its timeline's from there on, not every row before them.
 
 Choices the phase made where the task file left one open:
@@ -899,10 +917,7 @@ Choices the phase made where the task file left one open:
 - Three of the phase's limits had no test that could fail without them: the moment cap's count a moment at a time, a catch-up's stop at `PAGE_BYTES` with a resource changed twice counted once, and a stop after a tombstone, which has no contents to lose. Each now has one.
 - The limits' JSDoc now says what a catch-up does with them.
 
-Residuals the verifier named:
-
-- A catch-up that keeps a row whose contents are lost runs past every limit until it can stop, as the builder note on R13 and R21 asks. For a `from` older than `CUTOFF_WINDOW_MS`, that can make one result hold every resource changed since. It checks every row it keeps at each moment while it runs on, so its cost grows as the square of their number.
-- `MOMENT_CHANGE_CAP` lets a uri on its own exceed it never, rather than meet it never, as these notes first said.
+A residual the verifier named: a catch-up that keeps a row whose contents are lost runs past every limit until it can stop, as the builder note on R13 and R21 asks. For a `from` older than `CUTOFF_WINDOW_MS`, that can make one result hold every resource changed since. It checks every row it keeps at each moment while it runs on, so its cost grows as the square of their number.
 
 **Close-out.** The suite is 342 tests in 23 files, all passing, and both conformance suites pass. Phase 4's paging test now follows a run of catch-ups.
 
