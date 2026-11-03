@@ -38,7 +38,12 @@ export class Server extends DurableObject<Env> {
       // one timeline for both (D10).
       map: name.startsWith('A-split') ? LAYOUTS.split : LAYOUTS.shared,
       cutoffWindowMs: Number(env.CUTOFF_WINDOW_MS),
-      limits: { pageSize: Number(env.PAGE_SIZE), scanLimit: Number(env.SCAN_LIMIT), pageBytes: Number(env.PAGE_BYTES) },
+      limits: {
+        pageSize: Number(env.PAGE_SIZE),
+        scanLimit: Number(env.SCAN_LIMIT),
+        pageBytes: Number(env.PAGE_BYTES),
+        momentChangeCap: Number(env.MOMENT_CHANGE_CAP),
+      },
       extras: (new.target as typeof Server).extras,
     });
     const sockets = `${env.ORIGIN}/gateway/${env.GATEWAY_INSTANCE}/ws/`;

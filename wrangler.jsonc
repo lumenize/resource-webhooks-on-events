@@ -41,13 +41,18 @@
     "VERIFICATION_BURST": "10",
     // How often a client pings B on its socket. B treats a socket two intervals quiet as closed.
     "HEARTBEAT_MS": "30000",
-    // How many resources one page of a collection read carries at most.
+    // How many resources one page of a collection read, or one catch-up, carries at most. A
+    // catch-up runs on past this and the next two to finish a moment.
     "PAGE_SIZE": "100",
-    // How many rows one page of a collection read scans at most, its collection's or another's
-    // on the same timeline.
+    // How many rows one page of a collection read, or one catch-up, scans at most, its
+    // collection's or another's on the same timeline.
     "SCAN_LIMIT": "1000",
-    // How many bytes of contents one page of a collection read carries before it stops.
-    "PAGE_BYTES": "262144"
+    // How many bytes of contents one page of a collection read, or one catch-up, carries before
+    // it stops.
+    "PAGE_BYTES": "262144",
+    // How many of a collection's changes one moment may hold, past which a catch-up answers
+    // momentTooLarge and the client reads the collection again.
+    "MOMENT_CHANGE_CAP": "1000"
   },
   // The version each object runs, which it tells the page, since a deploy reaches each object late.
   "version_metadata": { "binding": "VERSION" },

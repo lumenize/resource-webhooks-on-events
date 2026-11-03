@@ -3,7 +3,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { LAYOUTS, newLane } from '../lane/lane';
-import { create, readAll, remove } from '../lane/resources';
+import { catchUp, create, readAll, remove, timelines } from '../lane/resources';
 
 const ids = (count: number) => Array.from({ length: count }, (_, i) => `ticket-${i + 1}`);
 
@@ -32,5 +32,16 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(pages[0].contents.map((entry) => ('text' in entry ? entry.text.length : 0))).toEqual([70, 70]);
     expect(pages.flatMap(({ contents }) => contents.map(({ uri }) => uri.slice(lane.root.length + 9))).sort()).toEqual(ids(3).sort());
     expect(pages.map(({ contents }) => contents.length)).toEqual([2, 1]);
+  });
+});
+
+describe('on the shared layout alone', () => {
+  it('R14: stops a catch-up on tickets/{id} short with no changes after more note changes than SCAN_LIMIT', async () => {
+    const lane = newLane('shared');
+    const from = (await timelines(lane)).work.latest;
+    const notes = [];
+    for (let i = 0; i < 5; i++) notes.push(await create(lane, `notes/note-${i}`, { title: `Note ${i}` }));
+    const result = await catchUp(lane, 'tickets/{id}', from);
+    expect(result).toMatchObject({ changes: [], hasMore: true, nextFrom: notes[2].revision });
   });
 });

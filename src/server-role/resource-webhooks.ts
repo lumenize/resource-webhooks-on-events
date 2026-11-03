@@ -10,9 +10,10 @@ import type {
   ReadCollectionResult,
   UriSpecification,
 } from '../extension-types';
-import { RESOURCE_REVISION_META_KEY } from '../extension-types';
+import { MERGE_PATCH_MIME_TYPE, RESOURCE_REVISION_META_KEY } from '../extension-types';
 import { JsonRpcError } from '../json-rpc';
 import type { TextResourceContents } from '../vendor/mcp-spec/2026-07-28/schema';
+import { diff, type JsonValue } from '../vendor/lumenize-merge-patch/merge-patch';
 import { INVALID_PARAMS } from '../vendor/mcp-spec/2026-07-28/schema';
 import { literalPrefix, templateCovers, templateMatcher } from './uri-templates';
 import { MOMENT_WIDTH, type Row, type TimelineMap, type Timelines } from './version-store';
@@ -24,13 +25,19 @@ export const MAX_NAMED_TEMPLATE_BYTES = 1024;
 /** How long a client that polls waits between catch-ups, in milliseconds (D12). */
 export const NEXT_POLL_MS = 30_000;
 
+/**
+ * How far one page of a read, or one catch-up, goes before it stops. A catch-up stops only once
+ * a moment is done, so it may run past any of the first three to finish one (R14).
+ */
 export interface CollectionLimits {
-  /** How many resources one page of a read carries at most. */
+  /** How many resources one result carries at most. */
   pageSize: number;
-  /** How many rows one page of a read scans at most, the collection's or not. */
+  /** How many rows one result scans at most, the collection's or not. */
   scanLimit: number;
-  /** How many bytes of contents one page of a read carries before it stops, in UTF-8. */
+  /** How many bytes of contents one result carries before it stops, in UTF-8. */
   pageBytes: number;
+  /** How many of a collection's changes one moment may hold, past which a catch-up answers `momentTooLarge` (D15). */
+  momentChangeCap: number;
 }
 
 export interface ResourceWebhooksOptions {
@@ -104,8 +111,10 @@ export class ResourceWebhooks {
   }
 
   /**
-   * Every covered resource changed after `from`, each as it stands at the timeline's latest
-   * moment, which is the result's `nextFrom`, a deleted one as a tombstone (R13, R19).
+   * Every covered resource changed after `from` and at or before the result's `nextFrom`, each as
+   * it stood at `nextFrom`, a deleted one as a tombstone (R13, R19). It stops short once a limit
+   * is reached, at the end of a moment where every resource it brings still has its contents, and
+   * `nextFrom` is then that moment, with `hasMore` true (R14). Otherwise it runs to the latest.
    */
   catchUp(params: CatchUpCollectionRequestParams): CatchUpCollectionResult {
     const coverage = this.#coverage(params);
@@ -113,31 +122,66 @@ export class ResourceWebhooks {
     const { from } = params;
     if (!isMoment(from)) throw new JsonRpcError(INVALID_PARAMS, 'from is not a moment of this server', { ...coverage.named, from });
     // The latest moment is read before the resources, in the same synchronous block (R13).
-    const nextFrom = store.latest(coverage.timeline);
+    const latest = store.latest(coverage.timeline);
     if (from < store.oldest(coverage.timeline)) {
       throw new JsonRpcError(INVALID_PARAMS, 'The moment is older than this server keeps', { reason: 'momentExpired', ...coverage.named });
     }
-    const changes = store
-      .changedAfter(coverage.timeline, from)
-      .filter((row) => coverage.covers(row.path))
-      .map((row) => this.#change(row, from));
-    return { resultType: 'complete', changes, hasMore: false, nextFrom, nextPollMs: NEXT_POLL_MS };
+    const { rows, stoppedAt } = this.#scan(coverage, from);
+    const patches = (params.patchMimeTypes ?? []).includes(MERGE_PATCH_MIME_TYPE);
+    const changes = rows.sort((a, b) => (a.moment === b.moment ? (a.path < b.path ? -1 : 1) : a.moment < b.moment ? -1 : 1)).map((row) => this.#change(row, from, patches));
+    return { resultType: 'complete', changes, hasMore: stoppedAt !== undefined, nextFrom: stoppedAt ?? latest, nextPollMs: NEXT_POLL_MS };
+  }
+
+  // The timeline's rows after `from` a moment at a time, keeping each covered resource's newest
+  // row so far, which is the resource as it stood at the last moment done. It stops after a moment
+  // once a limit is reached, unless a resource it keeps has lost its contents there (R13, R21).
+  #scan(coverage: Coverage, from: string): { rows: Row[]; stoppedAt?: string } {
+    const { store, limits } = this.#options;
+    const kept = new Map<string, Row>();
+    let scanned = 0;
+    let bytes = 0;
+    let moment: string | undefined;
+    let changesThisMoment = 0;
+    const full = () => kept.size >= limits.pageSize || scanned >= limits.scanLimit || bytes > limits.pageBytes;
+    const keepsContents = () => [...kept.values()].every((row) => row.deleted || row.contents !== null);
+    for (const row of store.rowsAfter(coverage.timeline, from)) {
+      if (row.moment !== moment) {
+        // A row of a later moment, so the one before is done, and a catch-up may stop there.
+        if (moment !== undefined && full() && keepsContents()) return { rows: [...kept.values()], stoppedAt: moment };
+        moment = row.moment;
+        changesThisMoment = 0;
+      }
+      scanned++;
+      if (!coverage.covers(row.path)) continue;
+      changesThisMoment++;
+      if (changesThisMoment > limits.momentChangeCap) {
+        throw new JsonRpcError(INVALID_PARAMS, 'One moment holds more changes than a catch-up sends', { reason: 'momentTooLarge', ...coverage.named });
+      }
+      bytes += utf8Length(row.contents ?? '') - utf8Length(kept.get(row.path)?.contents ?? '');
+      kept.set(row.path, row);
+    }
+    return { rows: [...kept.values()] };
   }
 
   // One resource's change from `from`: created if it did not exist then, deleted if it is gone
-  // now, else updated, with its revision at `from` as `previousRevision` (R19).
-  #change(row: Row, from: string): CollectionChange {
+  // now, else updated, with its revision at `from` as `previousRevision`. A change but a deletion
+  // carries a merge patch from the contents at `previousRevision` when the catch-up lists merge
+  // patches, A still keeps those contents and the patch is the smaller, and its contents otherwise (R19).
+  #change(row: Row, from: string, patches: boolean): CollectionChange {
     const before = this.#options.store.asOf(row.path, from);
     const existed = before !== undefined && !before.deleted;
     const effect = row.deleted ? 'deleted' : existed ? 'updated' : 'created';
     const uri = `${this.#options.root}/${row.path}`;
-    return {
-      uri,
-      effect,
-      ...(existed ? { previousRevision: before.moment } : {}),
-      revision: row.moment,
-      ...(row.deleted ? {} : { contents: { uri, mimeType: 'application/json', text: row.contents! } }),
-    };
+    const entry: CollectionChange = { uri, effect, ...(existed ? { previousRevision: before.moment } : {}), revision: row.moment };
+    if (row.deleted) return entry;
+    const text = row.contents!;
+    if (patches && existed && before.contents !== null) {
+      const change = diff(JSON.parse(before.contents) as JsonValue, JSON.parse(text) as JsonValue);
+      if (change.kind === 'patch' && utf8Length(JSON.stringify(change.patch)) < utf8Length(text)) {
+        return { ...entry, patchMimeType: MERGE_PATCH_MIME_TYPE, patch: change.patch };
+      }
+    }
+    return { ...entry, contents: { uri, mimeType: 'application/json', text } };
   }
 
   #contents(row: Row): TextResourceContents {

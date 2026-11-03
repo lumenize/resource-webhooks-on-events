@@ -142,10 +142,21 @@ export interface CatchUpCollectionRequest extends JSONRPCRequest {
   params: CatchUpCollectionRequestParams;
 }
 
-/** One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with contents added (R19). */
+/** The patch format A sends, RFC 7396's JSON merge patch. */
+export const MERGE_PATCH_MIME_TYPE = 'application/merge-patch+json';
+
+/**
+ * One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with
+ * contents added (R19). Any change but a deletion carries `contents`, or a `patch` from the
+ * contents at `previousRevision` in a format the catch-up listed.
+ */
 export interface CollectionChange extends ChangeSetEntry {
-  /** The resource as it stood at `nextFrom`, for any change but a deletion. */
+  /** The resource as it stood at `nextFrom`. */
   contents?: TextResourceContents | BlobResourceContents;
+  /** The patch's format, one of the catch-up's `patchMimeTypes`. */
+  patchMimeType?: string;
+  /** The patch, as JSON for a JSON-based format and as a string otherwise. */
+  patch?: unknown;
 }
 
 export interface CatchUpCollectionResult extends Result {

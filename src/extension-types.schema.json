@@ -234,7 +234,7 @@
             "type": "object"
         },
         "CollectionChange": {
-            "description": "One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with contents added (R19).",
+            "description": "One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with\ncontents added (R19). Any change but a deletion carries `contents`, or a `patch` from the\ncontents at `previousRevision` in a format the catch-up listed.",
             "properties": {
                 "contents": {
                     "anyOf": [
@@ -245,10 +245,17 @@
                             "$ref": "#/$defs/BlobResourceContents"
                         }
                     ],
-                    "description": "The resource as it stood at `nextFrom`, for any change but a deletion."
+                    "description": "The resource as it stood at `nextFrom`."
                 },
                 "effect": {
                     "$ref": "#/$defs/ChangeEffect"
+                },
+                "patch": {
+                    "description": "The patch, as JSON for a JSON-based format and as a string otherwise."
+                },
+                "patchMimeType": {
+                    "description": "The patch's format, one of the catch-up's `patchMimeTypes`.",
+                    "type": "string"
                 },
                 "previousRevision": {
                     "description": "The resource's revision before the change, absent for a creation.",

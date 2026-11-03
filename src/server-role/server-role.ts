@@ -80,7 +80,7 @@ export interface ServerRoleOptions {
   /** Which timeline each of A's listed uri-specifications names, one of LAYOUTS. */
   map: TimelineMap;
   cutoffWindowMs: number;
-  /** How far one page of a collection read goes. */
+  /** How far one page of a collection read, or one catch-up, goes. */
   limits: CollectionLimits;
   extras?: ServerExtras;
 }

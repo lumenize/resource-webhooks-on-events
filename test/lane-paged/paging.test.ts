@@ -1,7 +1,7 @@
 // A collection read a page at a time, with PAGE_SIZE at 1 (R22), on both layouts.
 import { describe, expect, it } from 'vitest';
 import { LAYOUTS, newLane } from '../lane/lane';
-import { catchUp, create, readCollection, remove } from '../lane/resources';
+import { catchUpAll, create, readCollection, remove } from '../lane/resources';
 
 describe.each(LAYOUTS)('on the %s layout', (layout) => {
   it('R22: brings each resource exactly once across pages that change between them, with one nextFrom to catch up from', async () => {
@@ -21,8 +21,8 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const nextFrom = pages[0].nextFrom;
     expect(pages.every((page) => page.nextFrom === nextFrom)).toBe(true);
     expect(pages.every((page) => page.ttlMs === 0 && page.cacheScope === 'public')).toBe(true);
-    const caught = await catchUp(lane, 'tickets/{id}', nextFrom);
-    expect(caught.changes.map(({ uri, effect }) => [uri.slice(lane.root.length + 1), effect])).toEqual([
+    const caught = await catchUpAll(lane, 'tickets/{id}', nextFrom);
+    expect(caught.flatMap(({ changes }) => changes).map(({ uri, effect }) => [uri.slice(lane.root.length + 1), effect])).toEqual([
       ['tickets/ticket-1', 'created'],
       ['tickets/ticket-3', 'deleted'],
     ]);

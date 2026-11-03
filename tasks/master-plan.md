@@ -859,6 +859,34 @@ Residuals to know of:
 
 **Close-out.** Phase 3's verifier findings are fixed here. The prunes Phase 3 built now have their tests. The suite is 325 tests in 20 files, all passing, and both conformance suites pass.
 
+### Phase 5
+
+**For Larry.** Nothing needs a decision before Phase 6. New in code: `MERGE_PATCH_MIME_TYPE`, and `MOMENT_CHANGE_CAP` at 1,000 in `wrangler.jsonc`. The phase named the second, so only its value is new.
+
+Choices the phase made where the task file left one open:
+
+- A sends a merge patch only when the catch-up lists `application/merge-patch+json`, A still keeps the contents at `previousRevision`, the change can be written as a merge patch, and the patch is shorter than the contents, in UTF-8. Otherwise it sends the contents, which R19's MAY allows. An update that changes only whitespace, which no merge patch needs, gets its contents too.
+- A catch-up stops at the end of a moment once `PAGE_SIZE` resources, `SCAN_LIMIT` rows or `PAGE_BYTES` of contents are reached, the same limits a read uses. It counts the contents of each resource it brings as it stood at the moment, rather than the patch it may send, since it can't know the patch until it stops.
+- `MOMENT_CHANGE_CAP` counts the covered changes at one moment, so a uri on its own never meets it.
+
+**Retro.**
+
+- The patch test's first run changed both of a ticket's members, so a merge patch was as long as the contents, and A rightly sent the contents. The test now renames the ticket and names it back, so the net change is the status alone, and a patch from the middle revision would carry the title too.
+- With `PAGE_SIZE` at 1, Phase 4's paging test now gets its catch-up in two results, so a helper follows a run while `hasMore` is true, as R14's client does.
+- A merge patch of a whole compact ticket is as long as the ticket, so the test that ticket-5's lost contents bring contents could not fail when the guard went. Its writes now send spaced JSON, which a patch of the whole ticket undercuts.
+- An empty patch for an update that changed only whitespace was a branch no test could need, since contents are as correct, and it went.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red on both layouts:
+
+- The patch and effects tests, for `previousRevision` taken from the row before the newest, as `store.before()` would give it, which also takes `effect` from the latest write.
+- The contents test, for patching a catch-up that lists no format, and for sending a patch no shorter than the contents. The ticket-5 contents test, for patching from contents the store has dropped.
+- The stop-short test, for bringing each resource at its newest rather than as of `nextFrom`, and for a catch-up with no `PAGE_SIZE` stop, which also turns D15's and the contents-lost test red.
+- D15's test, for stopping partway through a moment, and the moment-cap test, for leaving `MOMENT_CHANGE_CAP` unchecked.
+- The contents-lost test, for stopping where a resource has lost its contents.
+- The `lane-limits` test, for a catch-up that ignores `SCAN_LIMIT`.
+
+**Close-out.** The suite is 342 tests in 23 files, all passing, and both conformance suites pass. Phase 4's paging test now follows a run of catch-ups.
+
 ## Notes kept out of the proposal
 
 Larry's notes, which stay in this file when the proposal is split out of it.

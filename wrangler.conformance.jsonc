@@ -31,7 +31,8 @@
     "HEARTBEAT_MS": "30000",
     "PAGE_SIZE": "100",
     "SCAN_LIMIT": "1000",
-    "PAGE_BYTES": "262144"
+    "PAGE_BYTES": "262144",
+    "MOMENT_CHANGE_CAP": "1000"
   },
   "version_metadata": { "binding": "VERSION" },
   "dev": { "port": 8788, "ip": "localhost" }

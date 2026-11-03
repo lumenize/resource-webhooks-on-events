@@ -78,3 +78,10 @@ export async function readAll(lane: Lane, specification: string): Promise<ReadCo
 export function catchUp(lane: Lane, specification: string, from: string, extra: Record<string, unknown> = {}): Promise<CatchUpCollectionResult> {
   return lane.client.request('resources/collection/catchup', { ...named(lane, specification), from, ...extra });
 }
+
+/** Every catch-up of a run that has `hasMore` true, from `from` until it is false, as R14's client makes them. */
+export async function catchUpAll(lane: Lane, specification: string, from: string, extra: Record<string, unknown> = {}): Promise<CatchUpCollectionResult[]> {
+  const results = [await catchUp(lane, specification, from, extra)];
+  while (results.at(-1)!.hasMore) results.push(await catchUp(lane, specification, results.at(-1)!.nextFrom, extra));
+  return results;
+}

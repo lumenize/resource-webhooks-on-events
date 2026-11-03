@@ -130,18 +130,15 @@ export class Timelines {
     return this.#sql.exec<RowRecord>('SELECT * FROM Changes WHERE path = ? AND moment <= ? ORDER BY moment DESC LIMIT 1', path, moment).toArray().map(rowOf)[0];
   }
 
-  /** Each resource's newest row on the timeline, tombstones included, if it is later than `from`, in moment order. */
-  changedAfter(timeline: string, from: string): Row[] {
-    return this.#sql
-      .exec<RowRecord>(
-        `SELECT * FROM Changes AS c
-         WHERE timeline = ? AND moment > ? AND moment = (SELECT MAX(moment) FROM Changes WHERE path = c.path)
-         ORDER BY moment, path`,
-        timeline,
-        from,
-      )
-      .toArray()
-      .map(rowOf);
+  /**
+   * Every row on the timeline later than `from`, tombstones and superseded rows included, in
+   * moment order and path order within a moment, read as the caller iterates, so a caller that
+   * stops early reads no further.
+   */
+  *rowsAfter(timeline: string, from: string): Generator<Row> {
+    for (const record of this.#sql.exec<RowRecord>('SELECT * FROM Changes WHERE timeline = ? AND moment > ? ORDER BY moment, path', timeline, from)) {
+      yield rowOf(record);
+    }
   }
 
   /**
