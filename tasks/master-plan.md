@@ -339,7 +339,7 @@ covers(listed, clientTemplate):
 
 ### uriGlob, later
 
-A uriGlob is a third kind of uri-specification, for a collection a uriTemplate describes poorly, such as everything beneath a folder. The Filesystems working group's Problem Statement 2 asks for one, with `file:///tickets/**/*.md` as its example, and its strawman defers globs. This extension offers that group three rules, and adopts whatever it settles:
+A uriGlob is a third kind of uri-specification. A glob is the familiar way to write a filesystem-like collection, and reads more clearly than a template that could describe much the same one: `file:///tickets/**/*.md`, the example the Filesystems working group's Problem Statement 2 gives, against `file:///tickets/{+path}.md`. Its match is also defined by its own rules, where a template's is left open: RFC 6570 defines how a template expands, and says matching one "only works well if the template expressions are delimited by the beginning or end of the URI or by characters that cannot be part of the expansion". Problem Statement 2 asks for glob matching under a URI prefix to find resources, and the strawman defers globs, so a uriGlob would let a client watch what it found with the same pattern. This extension offers that group three rules, and adopts whatever it settles:
 
 - `*` matches any characters within one segment, and `**` zero or more whole segments.
 - A uriGlob has at most one `**`, so a matcher checks the segments before it from the URI's start and those after it from the end, and two globs' overlap (R1) stays easy to test.
