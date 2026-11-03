@@ -1,6 +1,6 @@
 # Resource webhooks on Events
 
-**Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 and 2026-11-03 with his decisions on paging, starting over, naming and the event (D13 to D19), and after a third Stage 1 pass on 2026-11-03, with his decisions on polling, restores, templates a server doesn't list, the event's id, a routing header, history and test layouts (D10, D12, D20 to D25). Pass 2's phases were written on 2026-11-03 and revised the same day for a Stage 2 panel's findings. § *Waiting on Larry before the build* lists what he decides before the build. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
+**Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 and 2026-11-03 with his decisions on paging, starting over, naming and the event (D13 to D19), and after a third Stage 1 pass on 2026-11-03, with his decisions on polling, restores, templates a server doesn't list, the event's id, a routing header, history and test layouts (D10, D12, D20 to D25). Pass 2's phases were written on 2026-11-03 and revised the same day for a Stage 2 panel's findings. Larry settled the names and the scope they raised that day. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
 
 ## References
 
@@ -652,12 +652,6 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - Nothing replaced survives: `src/` holds no `resources/webhooks/` method, no `'mcp.resource.updated'` name, no `src/server-role/targets.ts` and no `src/notes-http.ts`.
 
 **Mutation notes.** Removing one rule's only test turns the coverage check red. A webhook URL or document at `10.0.0.1` reaching its receiver turns the SSRF test red. Setting `CONFORMANCE` in `wrangler.jsonc` turns the bundle check red.
-
-### Waiting on Larry before the build
-
-Writing and reviewing the phases named a few things the proposal and § *Decisions* don't, and these are his:
-
-- **New names:** `scripts/check-deploy-bundle.mjs`, which § *Current state* now carries under that name.
 
 ## Non-goals
 
