@@ -21,17 +21,20 @@ This proposal builds on two drafts, a working group's problem statements and one
 
 Keeping a copy current needs only the newest value, though, not every event on the way to it, so it calls for a different contract than a stream of events, as § *SEP-3415's open question 2* argues: here, an event only says that something changed, and a catch-up brings the newest value. It also differs from the state sync needs of tasks in other ways, which § *Why is this different from task state sync?* covers.
 
-A client watching a resource today has three problems:
+A client watching resources today has four problems:
 
 1. **It must hold a stream open or poll.** Each has its own shortcomings:
-   - **Streaming.** `notifications/resources/updated` arrives only on a `subscriptions/listen` stream, since [SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575). A long-lived stream fits load-balanced and edge infrastructure poorly: proxies close idle connections, edge and serverless platforms cap how long a request may run, and a deploy or scale-in drops every stream an instance holds. Since 2026-07-28 a broken stream cannot resume, so a change made while it is down is lost without a trace.
+   - **Streaming.** `notifications/resources/updated` arrives only on a `subscriptions/listen` stream, since [SEP-2575](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2575). A long-lived stream fits load-balanced and edge infrastructure poorly: proxies close idle connections, edge and serverless platforms cap how long a request may run, and a deploy or scale-in drops every stream an instance holds.
    - **Polling** trades ***near real time*** against ***efficiency***. A long polling period means the client's state lags far behind. A short polling period spends a request per resource per interval, mostly to learn that nothing changed.
 2. **It cannot tell whether it already holds the latest value.** The notification names the URI and nothing else, so each one costs a read, even when the client already holds the change. A ticket edited three times in a second costs three reads, though a read made after the third edit already brought the newest value, and the client that made an edit reads it back.
-3. **Catching up after a disconnect is inefficient.** A client back from a disconnect cannot tell which resources changed while it was away, so it must read every resource it watches again.
+3. **Catching up after a disconnect is inefficient.** Since 2026-07-28 a broken stream cannot resume, so a change made while it is down is lost without a trace. A client back from a disconnect cannot tell which resources changed while it was away, so it must read every resource it watches again.
+4. **It can watch only the resources it already knows.** `subscriptions/listen` takes resource URIs, in `resourceSubscriptions`, and no templates. So a client watching a collection subscribes to each member it knows, and hears of a new one, if at all, only through `notifications/resources/list_changed`, which covers the server's whole list and names no resource.
 
 ### SEP-3415's open question 2
 
-SEP-3415's Open Question 2 sketches a minimal implementation of resource subscription over Events, using "a reserved `mcp.resource.updated` event type whose arguments are `{uri}`", to re-express core's `notifications/resources/updated`, which names one changed resource. This extension leaves that event to Open Question 2, and sends one of its own, `mcp.resource.collection.updated`, which names a collection and every resource in it that one change touched (D19). **However, a resource is state, and a watcher cares only about the latest version, not every change.** A receiver that was down while a ticket was edited, reopened and closed needs only the closed ticket. On SEP-3415's thread on 2026-10-16, Peter Alexander (@pja-ant) [wrote](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415#issuecomment-6215654779) that watching state and consuming messages "will need different handling and different APIs". The two "should likely share a bunch of the same machinery", he went on, but whether they should share an API "requires some thought and discussion". Here the event, delivered by webhook, is the shared machinery, and carries no state, only which resources changed and at which moment. The different API is the catch-up, which brings the newest values. SEP-3415 itself points this way: servers "SHOULD keep event payloads minimal", agents that need stronger guarantees should "use tools to read authoritative state", and servers "MAY implement resource watching through events".
+SEP-3415's Open Question 2 sketches a minimal implementation of resource subscription over Events, using "a reserved `mcp.resource.updated` event type whose arguments are `{uri}`", to re-express core's `notifications/resources/updated`, which names one changed resource. This extension leaves that event to Open Question 2, and sends one of its own, `mcp.resource.collection.updated`, which names a collection and every resource in it that one change touched (D19).
+
+**However, a resource is state, and a watcher cares only about the latest version, not every change.** A receiver that was down while a ticket was edited, reopened and closed needs only the closed ticket. On SEP-3415's thread on 2026-10-16, Peter Alexander (@pja-ant) [wrote](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415#issuecomment-6215654779) that watching state and consuming messages "will need different handling and different APIs". The two "should likely share a bunch of the same machinery", he went on, but whether they should share an API "requires some thought and discussion". Here the event, delivered by webhook, is the shared machinery, and carries no state, only which resources changed and at which moment. The different API is the catch-up, which brings the newest values. SEP-3415 itself points this way: servers "SHOULD keep event payloads minimal", agents that need stronger guarantees should "use tools to read authoritative state", and servers "MAY implement resource watching through events".
 
 ### Why is this different from task state sync?
 
@@ -54,11 +57,11 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 - **A client that can't take webhooks.** A command-line client polls `resources/collection/catchup` for `https://notes.example/notes/{id}` as often as each result's `nextPollMs` asks: one request for the whole collection, with no changes when nothing changed.
 - **A skill served over MCP.** A client that loaded `skill://code-review/SKILL.md` subscribes to `skill://code-review/{+path}`, hears of each changed file, and can ask for approval again before the model next uses the skill.
 
-§ *The design* answers the three problems in turn: a webhook needs no open stream, an event names the revision of each resource that changed, so a client skips it when it already holds them, its own writes included, and one catch-up brings only what changed in a whole collection. § *Decisions* says why, against the alternatives.
+§ *The design* answers the four problems in turn: a webhook needs no open stream, an event names the revision of each resource that changed, so a client skips it when it already holds them, its own writes included, one catch-up brings only what changed in a whole collection, and a subscription names a template, so a resource created under it brings an event too. § *Decisions* says why, against the alternatives.
 
 ## The design
 
-**The key idea is a timeline of moments.** A server records each change to its resources at a moment on a timeline: a string that sorts after every moment before it, such as a zero-padded counter. The `tickets` timeline in the examples below begins like this:
+**The key idea is a timeline of moments.** A server records each change to its resources at a moment on a timeline: a string that sorts after every moment before it, such as a counter zero-padded to a fixed width, so that `"042"` sorts before `"107"`, where `"42"` would not. The `tickets` timeline in the examples below begins like this:
 
 | moment | change |
 |---|---|
@@ -66,9 +69,9 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 | `"107"` | ticket-7 closed as a duplicate of ticket-9, both changed in one atomic step |
 | `"108"` | ticket-3 closed |
 
-The server keeps the latest moment and mints each new one later (R5). An event names each resource that changed and its new revision, so a client that already holds that revision skips it, and a catch-up brings every change after the moment the client is caught up to. A database's read replica follows its primary's oplog the same way, and wherever it stops, it holds the data as of that point, only behind. A catch-up differs in sending each resource once, as its contents or a patch from an earlier revision, rather than every operation, but the idea is the same.
+The server keeps the latest moment and mints each new one later (R5). An event names each resource that changed and its new revision, so a client that already holds that revision skips it, and a catch-up brings every change after the moment the client is caught up to. A database's read replica follows its primary's oplog the same way, and wherever it stops, it holds the data as of that point, which may be behind the primary. A catch-up differs in sending each resource once, as its contents or a patch from an earlier revision, rather than every operation, but the idea is the same.
 
-Rules are numbered R1 and up across the sections below. Each keeps its ID when others are added or removed, so the IDs follow the order the rules were raised, not the order shown, and a gap is a rule removed.
+Rules are numbered R1 and up across the sections below. Each keeps its ID when others are added or removed, so the IDs follow the order the rules were raised, not the order shown, and a gap is from a rule that was dropped.
 
 ### Definitions
 
@@ -77,7 +80,7 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 | server | An MCP server as its clients see it, at one endpoint, however many processes, replicas or database nodes serve it. | replicas sharing one database |
 | client | An MCP client, together with the application it runs in, which reads, subscribes, catches up and keeps copies. MCP's architecture calls that application the host, and this proposal says client throughout. | X and Y below |
 | uri-specification | A uri, a uriTemplate, or later a uriGlob (§ *uriGlob, later*). A server lists a uri in `resources/list` and a uriTemplate in `resources/templates/list`. | `tickets/{id}` |
-| collection | The resources a uri-specification covers. **A uri on its own is a collection of one.** | every ticket `tickets/{id}` covers, or `tickets/ticket-3` alone |
+| collection | The resources a uri-specification covers. A uri on its own is a collection of one. | every ticket `tickets/{id}` covers, or `tickets/ticket-3` alone |
 | timeline | The server's ordered record of the changes to a set of resources. | `tickets` below |
 | moment | The point on a timeline at which a change occurred, a string that sorts after every moment before it. | `"108"` |
 | latest moment | A timeline's most recent moment. A server stores it, and mints each new moment later than it (R5). | `"107"`, for `tickets` below |
@@ -86,7 +89,7 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 | copy | The contents a client last received or wrote for a resource, with the resource's revision then. | ticket-3's JSON at `"101"` |
 | catch-up | A `resources/collection/catchup` call and its result: every change to a uri-specification after the moment the client is caught up to, up to the result's `nextFrom`. A client is caught up to the last `nextFrom` it applied in full, and holds every change at or before it. | steps 3 and 6 below |
 
-### The happy path
+### A simple happy path
 
 Server A lists `tickets/{id}`, whose timeline's latest moment is `"107"`: ticket-3 last changed at `"101"`, and ticket-7 and ticket-9 at `"107"`. Two clients, X and Y, hold no copies yet, and each does steps 1 to 3. Each table shows what the server and each client hold after its step, in bold where the step changed it. The examples leave out JSON-RPC envelopes and core's result fields.
 
@@ -114,7 +117,7 @@ Each client now holds every ticket, and is caught up to `"107"`, the read's `nex
 | ticket-7 and ticket-9 | `"107"` | **`"107"`** | **`"107"`** |
 
 - **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its revision in `_meta` (R7), and `nextFrom`, the timeline's latest moment, with each resource as it stood at `nextFrom` or later. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. Every page repeats the first page's `nextFrom`. A resource that doesn't change while the client pages MUST come exactly once. The client catches up from `nextFrom` afterwards, which brings whatever changed while it paged, deletions included. Its result is a core `CacheableResult`.
-  - A uri on its own is a collection of one, and a client watching one reads it with `resources/collection/read` too, rather than `resources/read`. A copy's revision can be older than the history the server keeps, so a catch-up from it could get `momentExpired` (R21), while `nextFrom` is the timeline's latest moment.
+  - A uri on its own is a collection of one, and a client watching one reads it with `resources/collection/read` too, rather than `resources/read`, since only a collection read brings a `nextFrom` to catch up from. A copy's revision can be older than the history the server keeps, so a catch-up from it could get `momentExpired` (R21), while `nextFrom` is the timeline's latest moment.
 - **R8.** A client keeps, for each uri-specification it catches up on, the moment it is caught up to, and each copy's revision.
 
 #### Step 2, at `"107"`: X and Y subscribe
@@ -211,7 +214,7 @@ X's copy is at `"101"`, the patch's `previousRevision`, so X applies it (R19), a
 
 A timeline's scope is the server's choice, and no client sees it: a client subscribes, catches up and keeps the moment it is caught up to for each uri-specification (R8). Each of the two examples below serves tickets and notes. The names `tickets`, `notes` and `work` are the server's own.
 
-In the first example below, `tickets/{id}` and `notes/{id}` each have a timeline of their own, so writes to one never wait on the other (R5), and a client watching both subscribes and catches up on each. The happy path starts from this one, at `"107"`:
+In the first example below, `tickets/{id}` and `notes/{id}` each have a timeline of their own, so writes to one never wait on the other (R5), and a client watching both subscribes and catches up on each. § *A simple happy path* starts from this one, at `"107"`:
 
 ```yaml
 listed:                       # uri-specifications MAY point to separate timelines
@@ -266,12 +269,17 @@ A catch-up on `{type}/{id}` brings ticket-9 and its note as they stood at one mo
 
 ### Less common cases, most likely first
 
-**A writer's copy runs ahead of its catch-ups.**
+**A writer's copy runs ahead of its catch-ups.** From `"107"`, as in § *A simple happy path*, X updates ticket-3 at `"109"`, and then Y updates it at `"110"`. X's copy is at `"109"`, but X stays caught up to `"107"` (R9):
+
+| | Server A | Client X |
+|---|---|---|
+| latest moment | `"110"` | |
+| caught up to | | `"107"` |
+| ticket-3 | `"110"`, Y's update | `"109"`, X's update |
+
+X then catches up from `"107"`:
 
 ```jsonc
-// From "107" as in the happy path, X updates ticket-3 at "109". X's copy is at
-// "109", but X stays caught up to "107" (R9). Y updates ticket-3 at "110", and
-// X catches up from "107":
 {"uri": "tickets/ticket-3", "effect": "updated",
  "previousRevision": "101", "revision": "110",    // ticket-3 as of "107"
  "patchMimeType": "application/merge-patch+json", "patch": {...}}
@@ -283,7 +291,7 @@ A catch-up on `{type}/{id}` brings ticket-9 and its note as they stood at one mo
 **Messages that cross.**
 
 ```text
-From "107" as in the happy path:
+From "107" as in the simple happy path:
 X -> A   resources/update ticket-3, ifMatch "101"
 A -> X   event: ticket-3 at "109"              arrives before the reply
          X doesn't hold "109", so it catches up from "107"
@@ -331,7 +339,7 @@ covers(listed, clientTemplate):
 
 - **R21.** A server keeps the moment of every change, deletions included, back to a moment of its choosing, and may drop old contents at any time. A catch-up whose `from` is earlier than that gets `InvalidParams` (`-32602`) with `data.reason` `"momentExpired"`, and the client starts over (R23, D4). A server restored from a backup first mints a moment past every one it may have sent, and makes it the oldest it answers from, as etcd's `snapshot restore` does with `--bump-revision` and `--mark-compacted`. A server SHOULD keep that history longer than the time it grants between refreshes, and longer than a read of its largest collection takes, so that a client can catch up at each refresh (R12) and after reading any collection.
 
-**Resources a client may not read.** Q6 asks what a client sees of them.
+**Resources a client may not read.** Q6 asks what a client sees of them, and proposes an answer.
 
 ### Declaring the extension
 
@@ -425,7 +433,7 @@ IDs follow the order the questions were raised, not the order shown, and a gap i
   - (b) A change in access is a change on the timeline, which makes a resource's revision differ by who asks, against R7 and R11.
   - Recommendation: (a), designed, not built, since in the prototype every principal reads everything.
   - Under either, `nextFrom` moves with every change on the timeline (R13), so a principal watching a timeline it shares with resources it may not read learns when they change, as the strawman warns that a revision does. A server can give each part a timeline of its own where R1 allows, or R13's MUST could count only the moments sent to that principal.
-- **Q7. Starting to watch a collection in one call.** A client makes three: it reads the collection, subscribes with `events/subscribe`, and catches up (§ *The happy path*, steps 1 to 3). One call would be simpler to use.
+- **Q7. Starting to watch a collection in one call.** A client makes three: it reads the collection, subscribes with `events/subscribe`, and catches up (§ *A simple happy path*, steps 1 to 3). One call would be simpler to use.
   - (a) Keep the three calls, so SEP-3415's `events/subscribe` stays the one subscription lifecycle (D1).
   - (b) Add `resources/collection/subscribe` to this extension, which subscribes and returns the collection's contents. It would be a second subscription lifecycle beside `events/subscribe`, and its result would page as a collection read's does.
   - (c) Add a helper to the SDKs that makes the three calls, leaving the wire as in (a).
