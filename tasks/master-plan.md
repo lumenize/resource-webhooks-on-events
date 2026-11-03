@@ -1,6 +1,6 @@
 # Resource webhooks on Events
 
-**Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 with his decisions on paging and starting over (D13 to D15). Phases are unwritten. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
+**Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 with his decisions on paging, starting over and naming (D13 to D17). Phases are unwritten. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
 
 ## Objective
 
@@ -36,7 +36,7 @@ SEP-3415's Open Question 2 sketches a minimal implementation of resource subscri
 
 ### What the working group's charter asks
 
-The Tasks and Events working group's [charter](https://modelcontextprotocol.io/community/triggers-events/charter) asks for a callback mechanism "with defined ordering guarantees that hold across all transports", and counts "An accepted SEP defining the trigger/callback mechanism and its subscription lifecycle" among its success criteria. SEP-3415 leaves ordering across subscriptions to the server on purpose: "Servers that need stronger guarantees can implement them", as "A database change-data-capture server could use LSNs as cursors". For resources, a timeline is that guarantee, whatever order webhooks arrive in and whichever transport prompts a catch-up. And `events/subscribe` stays the one subscription lifecycle (D1).
+The Tasks and Events working group's [charter](https://modelcontextprotocol.io/community/triggers-events/charter) asks for a callback mechanism "with defined ordering guarantees that hold across all transports". SEP-3415 guarantees no order across subscriptions, and says "Servers that need stronger guarantees can implement them". A timeline is such a guarantee. It orders a server's changes, which commit in the order of their moments (R5), not its events, which still arrive in any order (R15), and it holds whichever transport prompts a catch-up.
 
 ### Use cases
 
@@ -54,10 +54,10 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 | moment | change |
 |---|---|
 | `"101"` | ticket-3 opened |
-| `"107"` | ticket-7 closed as a duplicate of ticket-9, both changed in one step |
+| `"107"` | ticket-7 closed as a duplicate of ticket-9, both changed in one transaction |
 | `"108"` | ticket-3 closed |
 
-The server keeps the latest moment and mints each new one later (R5). An event names the moment of its change, and a client keeps the moment it is caught up to, so it knows whether it already has the change, and a catch-up brings every change after. A database's read replica follows its primary's log the same way, as MongoDB's secondaries follow its oplog, and wherever it stops, it holds the data as of that point, only behind. A catch-up differs in sending each resource once, as its contents or a patch from an earlier revision, rather than every operation, but the idea is the same.
+The server keeps the latest moment and mints each new one later (R5). An event names the moment of its change, and a client keeps the moment it is caught up to, so it knows whether it already has the change, and a catch-up brings every change after. A database's read replica follows its primary's oplog the same way, and wherever it stops, it holds the data as of that point, only behind. A catch-up differs in sending each resource once, as its contents or a patch from an earlier revision, rather than every operation, but the idea is the same.
 
 Rules are numbered R1 and up across the sections below. Each keeps its ID when others are added or removed, so the IDs follow the order the rules were raised, not the order shown, and a gap is a rule removed.
 
@@ -74,16 +74,17 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 | revision | A moment at which a resource changed, which the Filesystems strawman's fields `revision` and `previousRevision` hold. A resource's revision, with nothing more said, is its latest, as `resources/stat` and `resources/read` report it (R7). | ticket-3's `"101"`, and `"108"` from step 4 |
 | tombstone | What a deleted resource leaves: its uri and the moment it was deleted. | ticket-3, deleted at `"111"` |
 | copy | The contents a client last received for a resource, with the resource's revision then. | ticket-3's JSON at `"101"` |
-| catch-up | A `resources/catchup` request and its result: every change to a uri-specification after the moment the client is caught up to, up to the result's `nextFrom`. A client is caught up to the last `nextFrom` it received, and holds every change at or before it. | step 6 below |
+| catch-up | A `resources/catchup` call and its result: every change to a uri-specification after the moment the client is caught up to, up to the result's `nextFrom`. A client is caught up to the last `nextFrom` it received, and holds every change at or before it. | steps 3 and 6 below |
 
 ### The happy path
 
-```jsonc
-// Server A lists tickets/{id}, whose timeline is at "107": ticket-3 last
-// changed at "101", ticket-7 and ticket-9 at "107". Clients X and Y each do
-// steps 1 to 3. JSON-RPC envelopes and core's result fields are left out.
+Server A lists `tickets/{id}`, whose timeline's latest moment is `"107"`: ticket-3 last changed at `"101"`, and ticket-7 and ticket-9 at `"107"`. Two clients, X and Y, hold no copies yet, and each does steps 1 to 3. Each table shows what the server and each client hold after its step, in bold where the step changed it. The examples leave out JSON-RPC envelopes and core's result fields.
 
-// 1. Read the collection, which brings every ticket that exists (R22).
+#### Step 1, at `"107"`: X and Y read the collection
+
+Each client reads the collection, which brings every ticket that exists.
+
+```jsonc
 {"method": "resources/collection/read", "params": {"uriTemplate": "tickets/{id}"}}
 {"contents": [
   {"uri": "tickets/ticket-3", "mimeType": "application/json",
@@ -91,36 +92,89 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
    "_meta": {"io.modelcontextprotocol/resource-revision": "101"}}
   // ...and ticket-7 and ticket-9, each at "107"
  ], "nextFrom": "107"}
-// Each client now holds every ticket, and is caught up to "107" on tickets/{id}.
+```
 
-// 2. Subscribe through SEP-3415, naming a uri-specification (R18).
+Each client now holds every ticket, and is caught up to `"107"`, the read's `nextFrom`.
+
+| | Server A | Client X | Client Y |
+|---|---|---|---|
+| latest moment | `"107"` | | |
+| caught up to | | **`"107"`** | **`"107"`** |
+| ticket-3 | `"101"`, open | **`"101"`, open** | **`"101"`, open** |
+| ticket-7 and ticket-9 | `"107"` | **`"107"`** | **`"107"`** |
+
+- **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its revision in `_meta` (R7), and `nextFrom`, the timeline's latest moment, which the server reads before the first page's resources. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. Every page repeats the first page's `nextFrom`, which the cursor carries. A resource that doesn't change while the client pages MUST come exactly once. The client catches up from `nextFrom` afterwards, which brings whatever changed while it paged, deletions included. The read never answers `momentExpired` or `momentTooLarge`, and its result is a core `CacheableResult`.
+- **R8.** A client keeps, for each uri-specification it catches up on, the moment it is caught up to, and each copy's revision. A client that catches up on a template and on a uri it covers (D9) is caught up on the uri to at least each `nextFrom` it receives for the template.
+
+#### Step 2, at `"107"`: X and Y subscribe
+
+Each client subscribes through SEP-3415, naming the uri-specification as the event's `arguments`.
+
+```jsonc
 {"method": "events/subscribe", "params": {
   "name": "mcp.resource.updated",
   "arguments": {"uriTemplate": "tickets/{id}"},
   "delivery": {"mode": "webhook", "url": "https://gateway.example/hooks/x",
                "secret": "whsec_..."}}}
+```
 
-// 3. Catch up from "107", which brings any change made before the subscription
-//    took hold (R18). Here there is none.
+A now holds a subscription for each client, and nothing else changes.
+
+- **R18.** A client subscribes with `events/subscribe`, naming `mcp.resource.updated` and a uri-specification as `arguments`: `{uri}`, `{uriTemplate}`, or later `{uriGlob}`, and refreshes the subscription as SEP-3415 says. A client new to the uri-specification first reads its collection (R22). Once subscribed, it catches up, so no change falls between the read and the subscription.
+
+#### Step 3, at `"107"`: X and Y catch up
+
+Each client catches up from `"107"`, which brings any change made before its subscription took hold. Here there is none, so nothing changes.
+
+```jsonc
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
   "from": "107", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [], "hasMore": false, "nextFrom": "107"}
+```
 
-// 4. Y closes ticket-3 with the strawman's resources/update (R7, R17).
+- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the moment the client is caught up to as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. A catch-up's `changes` MUST hold every covered resource changed after `from` and at or before its `nextFrom`, as it stood at `nextFrom`, a deleted one as a tombstone, so a resource missing from them did not change in that span. With `hasMore` false, its `nextFrom` is no earlier than any moment the server had sent when it was read. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
+  - A uri-specification on a timeline gets the timeline's latest moment as its `nextFrom` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither. A catch-up with no `from` gets `InvalidParams` too.
+  - A server meets the MUST by reading the timeline's latest moment before the resources, from one store, not from a lagging replica.
+
+#### Step 4, at `"108"`: Y closes ticket-3
+
+Y closes ticket-3 with the strawman's `resources/update`, sending the whole closed ticket, and its copy's revision as `ifMatch` (R7).
+
+```jsonc
 {"method": "resources/update", "params": {"uri": "tickets/ticket-3",
-  "ifMatch": "101", "contents": {...}}}            // the whole closed ticket
+  "ifMatch": "101", "contents": {...}}}
 {"changes": [{"uri": "tickets/ticket-3", "effect": "updated",
               "previousRevision": "101", "revision": "108"}]}
-// Y's copy of ticket-3 is at "108", but Y stays caught up to "107" on
-// tickets/{id}, since others' changes could have landed before "108" (R9).
+```
 
-// 5. A POSTs the event to each subscription's webhook, with no contents (R10).
+Y's copy of ticket-3 is at `"108"`, but Y stays caught up to `"107"`, since others' changes could have landed before `"108"` (R9).
+
+| | Server A | Client X | Client Y |
+|---|---|---|---|
+| latest moment | **`"108"`** | | |
+| caught up to | | `"107"` | `"107"` |
+| ticket-3 | **`"108"`, closed** | `"101"`, open | **`"108"`, closed** |
+| ticket-7 and ticket-9 | `"107"` | `"107"` | `"107"` |
+
+- **R17.** A server MUST store a create's or an update's contents as sent, so the writer's copy is the resource at the reply's `revision`.
+
+#### Step 5, at `"108"`: A sends the event
+
+A POSTs the event to each subscription's webhook. It names the change, and carries none of the ticket's contents, so no copy changes.
+
+```jsonc
 {"eventId": "108:tickets/ticket-3", "name": "mcp.resource.updated",
  "data": {"uri": "tickets/ticket-3", "effect": "updated",
           "previousRevision": "101", "revision": "108"}}
+```
 
-// 6. Y holds ticket-3 at "108", so it skips the catch-up (R11). X holds it at
-//    "101", so X catches up from "107".
+- **R10.** Once a change is visible to a catch-up, the server MUST send `mcp.resource.updated` to each subscription covering each resource it touched, with the strawman's change-set entry as `data`, `revision` always present. Its `eventId` is unique to the moment and the uri, and SEP-3415's `cursor` stays null. A server MAY replace an undelivered event with a newer one for the same uri, leaving `truncated` false, as SEP-3415 does for events with no replay, and as Peter agreed. Across a server restart an event goes at most once, as SEP-3415 says of such events, and R12 recovers it.
+
+#### Step 6, at `"108"`: X catches up
+
+Y already holds ticket-3 at `"108"`, so it skips the catch-up. X holds it at `"101"`, so X catches up from `"107"`.
+
+```jsonc
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
   "from": "107", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
@@ -128,19 +182,18 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
    "previousRevision": "101", "revision": "108",
    "patchMimeType": "application/merge-patch+json",
    "patch": {"status": "closed"}}], "hasMore": false, "nextFrom": "108"}
-// X's copy is at "101", the patch's previousRevision, so X applies it (R19),
-// and X is caught up to "108" on tickets/{id}.
 ```
 
-- **R18.** A client subscribes with `events/subscribe`, naming `mcp.resource.updated` and a uri-specification as `arguments`: `{uri}`, `{uriTemplate}`, or later `{uriGlob}`, and refreshes the subscription as SEP-3415 says. A client new to the uri-specification first reads its collection (R22). Once subscribed, it catches up, so no change falls between the read and the subscription.
-- **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its revision in `_meta` (R7), and `nextFrom`, the timeline's latest moment, which the server reads before the first page's resources. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. Every page repeats the first page's `nextFrom`, which the cursor carries. A resource that doesn't change while the client pages MUST come exactly once. The client catches up from `nextFrom` afterwards, which brings whatever changed while it paged, deletions included. The read never answers `momentExpired` or `momentTooLarge`, and its result is a core `CacheableResult`.
-- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the moment the client is caught up to as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. A catch-up's `changes` MUST hold every covered resource changed after `from` and at or before its `nextFrom`, as it stood at `nextFrom`, a deleted one as a tombstone, so a resource missing from them did not change in that span. With `hasMore` false, its `nextFrom` is no earlier than any moment the server had sent when it was read. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
-  - A uri-specification on a timeline gets the timeline's latest moment as its `nextFrom` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither. A catch-up with no `from` gets `InvalidParams` too.
-  - A server meets the MUST by reading the timeline's latest moment before the resources, from one store, not from a lagging replica.
-- **R10.** Once a change is visible to a catch-up, the server MUST send `mcp.resource.updated` to each subscription covering each resource it touched, with the strawman's change-set entry as `data`, `revision` always present. Its `eventId` is unique to the moment and the uri, and SEP-3415's `cursor` stays null. A server MAY replace an undelivered event with a newer one for the same uri, leaving `truncated` false, as SEP-3415 does for events with no replay, and as Peter agreed. Across a server restart an event goes at most once, as SEP-3415 says of such events, and R12 recovers it.
+X's copy is at `"101"`, the patch's `previousRevision`, so X applies it (R19), and is caught up to `"108"`. Y stays caught up to `"107"` until its next catch-up.
+
+| | Server A | Client X | Client Y |
+|---|---|---|---|
+| latest moment | `"108"` | | |
+| caught up to | | **`"108"`** | `"107"` |
+| ticket-3 | `"108"`, closed | **`"108"`, closed** | `"108"`, closed |
+| ticket-7 and ticket-9 | `"107"` | `"107"` | `"107"` |
+
 - **R11.** When a client receives that event, it MUST catch up, unless it already holds that uri, or its tombstone, at that moment or later, which lets the writer skip its own change.
-- **R17.** A server MUST store a create's or an update's contents as sent, so the writer's copy is the resource at the reply's `revision`.
-- **R8.** A client keeps, for each uri-specification it catches up on, the moment it is caught up to, and each copy's revision. A client that catches up on a template and on a uri it covers (D9) is caught up on the uri to at least each `nextFrom` it receives for the template.
 
 ### Timelines and moments
 
