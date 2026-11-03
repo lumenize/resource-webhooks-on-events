@@ -1,7 +1,7 @@
 // The client's copies with MOMENT_CHANGE_CAP at 1, so a cascade's moment is too large for a
 // catch-up (R14, R23), on both layouts.
 import { describe, expect, it } from 'vitest';
-import { gatedClient, namedAt } from '../lane/gate';
+import { gatedClient, namedAt } from '../client/gate';
 import { LAYOUTS, newLane } from '../lane/lane';
 import { create, timelines, update } from '../lane/resources';
 

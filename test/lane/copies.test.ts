@@ -1,13 +1,13 @@
 // The client's copies, kept by the client's rules against real A and B, with a gate on the
 // client's transport that holds a request or a reply until the test releases it (R8, R9, R11,
-// R12, R15, R16, R18, R19, R21, R23), on both layouts where a test writes. Paging, stopping short
-// and the moment cap have their own lanes.
+// R12, R15, R16, R18, R19, R21, R23), on both layouts but where a test names one. Paging,
+// stopping short and the moment cap have their own lanes.
 import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeSetEntry } from '../../src/extension-types';
 import { deliveryHeaders } from '../../src/standard-webhooks';
 import { NETWORK_WAIT, watch, type Party } from '../client/parties';
-import { gatedClient, namedAt } from './gate';
+import { gatedClient, namedAt } from '../client/gate';
 import { callWorker, LAYOUTS, newLane, type Lane } from './lane';
 import { create, remove, update } from './resources';
 
@@ -170,7 +170,8 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     await x.copies.refresh(named);
     expect(revisionOf('tickets/ticket-2')).toBe(two.revision);
 
-    // B's socket closes, A's retries for the change run out, and X reconnects.
+    // B's socket closes and A's retries for the change run out, so only the catch-up that
+    // reconnecting brings can carry the change.
     x.listener.close();
     const three = await create(lane, 'tickets/ticket-3', ticket('Reconnected'));
     const schedule = env.RETRY_SCHEDULE_MS.split(',').map(Number);

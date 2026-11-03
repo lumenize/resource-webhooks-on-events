@@ -6,7 +6,7 @@ import { Copies, PATCH_MIME_TYPES, type CollectionEvent, type Contents, type Log
 import { createMcpClient, OAuthSession } from '../../src/client/mcp-client';
 import type { CatchUpCollectionResult, ReadCollectionResult, UriSpecification } from '../../src/extension-types';
 import { fromBase64url } from '../../src/auth/signing';
-import { listen, subscribe, type Listener, type Party, type Tier } from '../client/parties';
+import { listen, subscribe, type Listener, type Party, type Tier } from './parties';
 
 /** A hold on the next request for one method, at the request or at its reply. */
 export interface Hold {

@@ -1,7 +1,8 @@
 // Whether the race the acknowledgement guards against happens on Cloudflare: `b` sends its secret
 // on the socket and subscribes at once, without waiting for B to acknowledge it, and A's challenge
 // may reach B first. This measures rather than gates, and `results/acknowledgement.json` keeps
-// the outcomes for sep-notes.md. Eight runs, since B's host takes ten verifications a minute.
+// the outcomes. Eight runs, since A sends one host a burst of ten verifications, refilled at one a
+// minute.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { McpError } from '../../src/client/mcp-client';
@@ -28,9 +29,10 @@ describe("b's acknowledgement on the deployed Worker", () => {
     }
     mkdirSync('results', { recursive: true });
     writeFileSync('results/acknowledgement.json', JSON.stringify(outcomes, null, 1));
-    // What eight runs on 2026-10-25 measured. The race shows as `refused challenge_failed`, B having
-    // answered A's challenge before it held the secret, and then sep-notes.md's finding changes.
-    // `refused -32025` means B's host ran out of verifications: rerun a minute later.
+    // What eight runs on 2026-10-25 measured, and again on 2026-11-03. The race shows as `refused
+    // challenge_failed`, B having answered A's challenge before it held the secret. `refused
+    // -32025` means B's host ran out of verifications: rerun once the burst has refilled, about
+    // eight minutes later.
     expect(outcomes).toEqual(Array.from({ length: 8 }, () => 'subscribed'));
   });
 });

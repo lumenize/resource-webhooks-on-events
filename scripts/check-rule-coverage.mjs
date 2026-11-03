@@ -4,7 +4,7 @@
 // passing test's title, as `R13, R14: brings ...`, and exits 1 naming each rule none names.
 import { readFileSync } from 'node:fs';
 
-const [file = 'test-results.json'] = process.argv.slice(2);
+const [file = 'results/test-results.json'] = process.argv.slice(2);
 // R6, several writers minting moments, is designed, not built.
 const REQUIRED = Array.from({ length: 24 }, (_, index) => index + 1).filter((rule) => rule !== 6);
 

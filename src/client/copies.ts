@@ -3,11 +3,12 @@
 // the moment it is caught up to (R8), and catches up again when an event names a change it lacks
 // (R11), when it may have missed one (R12), and while a catch-up says there is more (R14). It runs
 // one read or run of catch-ups per uri-specification at a time, and an event that arrives meanwhile
-// waits for it (R16). A copy changes only for a later revision (R15), from its own write's reply
-// for the one resource it wrote (R9), and a patch applies only to the copy it starts from, or the
-// client reads the resource (R19). A moment too old or too large starts the collection over (R21,
-// R14, R23). It imports, besides types, the copied merge patch, the template matcher and the
-// revision's `_meta` key, by `.ts` paths, so Node runs it with types stripped.
+// waits for it (R16). Outside a start-over's read, a copy changes only for a later revision (R15),
+// from its own write's reply for the one resource it wrote (R9), and a patch applies only to the
+// copy it starts from, or the client reads the resource (R19). A moment too old or too large
+// starts the collection over (R21, R14, R23). It imports, besides types, the copied merge patch,
+// the template matcher and the revision's `_meta` key, by `.ts` paths, so Node runs it with types
+// stripped.
 import type { CatchUpCollectionResult, ChangeSetEntry, CollectionChange, CollectionUpdatedData, ReadCollectionResult, UriSpecification } from '../extension-types.ts';
 import { RESOURCE_REVISION_META_KEY } from '../extension-types.ts';
 import { templateCovers, templateMatcher } from '../server-role/uri-templates.ts';
@@ -34,7 +35,8 @@ export type LogEntry =
   | { kind: 'event'; eventId: string; outcome: 'skipped' | 'caught up' }
   | { kind: 'trigger'; trigger: 'started' | 'refreshed' | 'reconnected' | 'gap'; named: UriSpecification }
   | { kind: 'started over'; named: UriSpecification; reason: string }
-  | { kind: 'read failed'; uri: string };
+  | { kind: 'read failed'; uri: string }
+  | { kind: 'poll failed'; named: UriSpecification; error: string };
 
 export interface CopiesOptions {
   /** One page of `resources/collection/read`. */
@@ -52,7 +54,7 @@ interface Watched {
   named: UriSpecification;
   /** Whether a uri is in the collection. */
   covers: (uri: string) => boolean;
-  /** The moment the client is caught up to, once it has read the collection. */
+  /** The moment the client is caught up to, once a read of it, or a catch-up of a wider one, has set it. */
   caughtUpTo?: string;
   /** The tail of its runs, so each starts once the one before has ended (R16). */
   tail: Promise<void>;
@@ -80,20 +82,31 @@ export class Copies {
     return this.#copies;
   }
 
-  /** The moment the client is caught up to for the uri-specification, once it has read it. */
+  /** The moment the client is caught up to for the uri-specification, if one is set. */
   caughtUpTo(named: UriSpecification): string | undefined {
     return this.#watched.get(keyOf(named))?.caughtUpTo;
   }
 
-  /** Starts watching a uri-specification: it reads the collection, subscribes, then catches up (R18). */
+  /**
+   * Starts watching a uri-specification: it reads the collection, subscribes, then catches up
+   * (R18). One it watches already waits for what is under way, and one whose watch fails is not
+   * watched, so a later call starts it afresh.
+   */
   watch(named: UriSpecification): Promise<void> {
-    const covers = coversOf(named);
-    const watched: Watched = { named, covers, tail: Promise.resolve() };
-    this.#watched.set(keyOf(named), watched);
+    const key = keyOf(named);
+    const existing = this.#watched.get(key);
+    if (existing) return this.#run(existing, async () => undefined);
+    const watched: Watched = { named, covers: coversOf(named), tail: Promise.resolve() };
+    this.#watched.set(key, watched);
     return this.#run(watched, async () => {
-      const read = await this.#read(watched);
-      await this.#options.subscribe(named);
-      await this.#afterRead(watched, read);
+      try {
+        const read = await this.#read(watched);
+        await this.#options.subscribe(named);
+        await this.#afterRead(watched, read);
+      } catch (error) {
+        this.#watched.delete(key);
+        throw error;
+      }
     });
   }
 
@@ -111,8 +124,9 @@ export class Copies {
         const copy = this.#copies.get(uri);
         return copy !== undefined && copy.revision >= revision;
       });
-      this.#options.log?.({ kind: 'event', eventId: event.eventId, outcome: held ? 'skipped' : 'caught up' });
       if (!held) await this.#catchUpRun(watched);
+      // Logged once the catch-up has ended, so whoever waits on the log sees the copies after it.
+      this.#options.log?.({ kind: 'event', eventId: event.eventId, outcome: held ? 'skipped' : 'caught up' });
     });
   }
 
@@ -150,23 +164,31 @@ export class Copies {
   /**
    * Catches up on the uri-specification every `max(nextPollMs, floorMs)`, following a run with
    * `hasMore` true to its end with no wait, as a client that can't take webhooks does, until
-   * `signal` aborts (R13, R14). The floor is SEP-3415's default, 1000 ms.
+   * `signal` aborts (R13, R14). A run that fails is logged, and the next comes after the floor.
+   * The floor is SEP-3415's default, 1000 ms.
    */
   async poll(named: UriSpecification, signal: AbortSignal, floorMs = 1000): Promise<void> {
     const watched = this.#watched.get(keyOf(named));
     if (!watched) throw new RangeError('Watch a uri-specification before polling it');
     while (!signal.aborted) {
       let wait = floorMs;
-      await this.#run(watched, async () => {
-        const last = await this.#catchUpRun(watched);
-        wait = Math.max(last?.nextPollMs ?? floorMs, floorMs);
-      });
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, wait);
-        signal.addEventListener('abort', () => {
-          clearTimeout(timer);
-          resolve();
+      try {
+        await this.#run(watched, async () => {
+          const next = (await this.#catchUpRun(watched))?.nextPollMs;
+          wait = typeof next === 'number' && Number.isFinite(next) ? Math.max(next, floorMs) : floorMs;
         });
+      } catch (error) {
+        this.#options.log?.({ kind: 'poll failed', named, error: String(error) });
+      }
+      if (signal.aborted) break;
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', done);
+          resolve();
+        };
+        const timer = setTimeout(done, wait);
+        signal.addEventListener('abort', done);
       });
     }
   }
@@ -201,37 +223,40 @@ export class Copies {
 
   // Reads the collection, every page, replacing each copy its pages name, even with an earlier
   // revision, since a read's pages are not R15's later-only changes, and answers the uris they
-  // named (R22, R23).
-  async #read(watched: Watched): Promise<Set<string>> {
+  // named and the read's `nextFrom` (R22, R23).
+  async #read(watched: Watched): Promise<{ named: Set<string>; nextFrom: string }> {
     const named = new Set<string>();
     let page = await this.#options.read(watched.named);
     const nextFrom = page.nextFrom;
     for (;;) {
       for (const contents of page.contents) {
         named.add(contents.uri);
-        this.#copies.set(contents.uri, { revision: String(contents._meta?.[RESOURCE_REVISION_META_KEY]), deleted: false, contents });
+        this.#copies.set(contents.uri, { revision: revisionOf(contents), deleted: false, contents });
       }
       if (page.nextCursor === undefined) break;
       page = await this.#options.read(watched.named, page.nextCursor);
     }
-    // A read sets the moment outright, since a start-over may follow a Wipe that minted it anew.
-    watched.caughtUpTo = nextFrom;
-    return named;
+    return { named, nextFrom };
   }
 
-  // The catch-ups after a read, until one has `hasMore` false. Then each copy in the collection
-  // that neither the read nor they named goes, if it is at or before the last `nextFrom` (R23).
-  async #afterRead(watched: Watched, named: Set<string>): Promise<CatchUpCollectionResult | undefined> {
+  // The catch-ups after a read, from its `nextFrom`, until one has `hasMore` false. Then each copy
+  // in the collection that neither the read nor they named goes, if it is at or before the last
+  // `nextFrom` they applied (R23). They keep their own `from`, since a wider uri-specification's
+  // catch-up may move this one's forward meanwhile (R8).
+  async #afterRead(watched: Watched, { named, nextFrom }: { named: Set<string>; nextFrom: string }): Promise<CatchUpCollectionResult | undefined> {
+    let from = nextFrom;
+    this.#caughtUp(watched, from);
     let last: CatchUpCollectionResult | undefined;
     for (;;) {
-      last = await this.#options.catchUp(watched.named, watched.caughtUpTo!);
+      last = await this.#options.catchUp(watched.named, from);
       for (const { uri } of last.changes) named.add(uri);
       if (!(await this.#apply(last.changes))) break;
-      this.#caughtUp(watched, last.nextFrom);
+      from = last.nextFrom;
+      this.#caughtUp(watched, from);
       if (!last.hasMore) break;
     }
     for (const [uri, copy] of this.#copies) {
-      if (watched.covers(uri) && !named.has(uri) && copy.revision <= watched.caughtUpTo!) this.#copies.delete(uri);
+      if (watched.covers(uri) && !named.has(uri) && copy.revision <= from) this.#copies.delete(uri);
     }
     return last;
   }
@@ -255,7 +280,8 @@ export class Copies {
   async #patch(change: CollectionChange, copy: Copy | undefined): Promise<boolean> {
     if (copy && !copy.deleted && copy.revision === change.previousRevision && copy.contents && 'text' in copy.contents) {
       const text = JSON.stringify(applyMergePatch(JSON.parse(copy.contents.text) as JsonValue, change.patch as JsonValue));
-      this.#set(change.uri, { revision: change.revision, deleted: false, contents: { ...copy.contents, text } });
+      const _meta = { ...copy.contents._meta, [RESOURCE_REVISION_META_KEY]: change.revision };
+      this.#set(change.uri, { revision: change.revision, deleted: false, contents: { ...copy.contents, text, _meta } });
       return true;
     }
     let contents: Contents;
@@ -265,7 +291,7 @@ export class Copies {
       this.#options.log?.({ kind: 'read failed', uri: change.uri });
       return false;
     }
-    const revision = String(contents._meta?.[RESOURCE_REVISION_META_KEY]);
+    const revision = revisionOf(contents);
     if (revision < change.revision) return false;
     this.#set(change.uri, { revision, deleted: false, contents });
     return true;
@@ -285,6 +311,13 @@ export class Copies {
     const held = this.#copies.get(uri);
     if (!held || held.revision < copy.revision) this.#copies.set(uri, copy);
   }
+}
+
+// The revision a read item carries in `_meta` (R7), or the empty string, which sorts before every
+// moment, for one that carries none.
+function revisionOf(contents: Contents): string {
+  const revision = contents._meta?.[RESOURCE_REVISION_META_KEY];
+  return typeof revision === 'string' ? revision : '';
 }
 
 function keyOf(named: UriSpecification): string {

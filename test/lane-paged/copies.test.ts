@@ -2,7 +2,7 @@
 // (R14, R16), on both layouts.
 import { describe, expect, it, vi } from 'vitest';
 import { NETWORK_WAIT } from '../client/parties';
-import { gatedClient, namedAt } from '../lane/gate';
+import { gatedClient, namedAt } from '../client/gate';
 import { LAYOUTS, newLane } from '../lane/lane';
 import { create, timelines } from '../lane/resources';
 
@@ -30,9 +30,34 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(catchUps.slice(-3).map(({ params }) => params.from)).toEqual([expect.any(String), expect.any(String), expect.any(String)]);
     expect(x.copies.caughtUpTo(named)).toBe(latest);
     await event;
-    // The event ran R11 after the run, and with no changes listed it caught up once more.
-    expect(x.gate.requests.filter(({ method }) => method === 'resources/collection/catchup')).toHaveLength(runLength + 1);
+    // The event ran R11 after the run, and with no changes listed it caught up once more, from
+    // where the whole run ended.
+    const after = x.gate.requests.filter(({ method }) => method === 'resources/collection/catchup');
+    expect(after).toHaveLength(runLength + 1);
+    expect(after.at(-1)!.params.from).toBe(latest);
     expect(x.copies.copies().size).toBe(3);
+  });
+
+  it('R13, R14: polls, following a run with hasMore true to its end with no wait, then waits nextPollMs', async () => {
+    const lane = newLane(layout);
+    const x = await gatedClient(lane, 'x');
+    const named = namedAt(lane, 'tickets/{id}');
+    await x.copies.watch(named);
+    x.forward(false);
+    for (const id of ['ticket-1', 'ticket-2', 'ticket-3']) await create(lane, `tickets/${id}`, ticket(id));
+    const latest = (await timelines(lane))[layout === 'split' ? 'tickets' : 'work'].latest;
+    const catchUps = () => x.gate.requests.filter(({ method }) => method === 'resources/collection/catchup').length;
+    const before = catchUps();
+    const stop = new AbortController();
+    const polling = x.copies.poll(named, stop.signal);
+    await vi.waitFor(() => expect(x.copies.caughtUpTo(named)).toBe(latest), NETWORK_WAIT);
+    // Three changes at three moments, one to a result, with nothing between them.
+    expect(catchUps() - before).toBe(3);
+    // The last one's nextPollMs is 30 s, so no other comes now.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(catchUps() - before).toBe(3);
+    stop.abort();
+    await polling;
   });
 
   it('R16: an event during a paging collection read waits for the read', async () => {

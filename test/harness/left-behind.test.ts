@@ -1,7 +1,7 @@
 // What the first flavor left behind stays behind: no carried or root file names a file, script or
 // route this flavor dropped. SCAN_ROOT points the scan at another tree, which is how it was shown
 // to find each name in the first flavor's, `../resource-webhooks-standalone`.
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 
@@ -43,6 +43,11 @@ function scanned(): string[] {
   const ours = ['src', 'scripts', 'test'].flatMap(filesUnder).filter((path) => !path.startsWith('src/vendor/') && path !== THIS_FILE);
   return [...ours, ...ROOT_FILES.filter((file) => statSync(join(ROOT, file), { throwIfNoEntry: false }))];
 }
+
+it('holds none of the files the design replaced', () => {
+  const replaced = ['src/server-role/targets.ts', 'src/notes-http.ts', 'src/tool-types.ts', 'src/resource-webhooks-types.ts'];
+  expect(replaced.filter((file) => existsSync(join(ROOT, file)))).toEqual([]);
+});
 
 it('finds no left-behind name in any carried or root file', () => {
   const files = scanned();

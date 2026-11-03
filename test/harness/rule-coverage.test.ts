@@ -8,15 +8,15 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 
 const SCRIPT = join(import.meta.dirname, '../../scripts/check-rule-coverage.mjs');
-let scratch: string | undefined;
+const scratches: string[] = [];
 
 afterEach(() => {
-  if (scratch) rmSync(scratch, { recursive: true, force: true });
-  scratch = undefined;
+  for (const scratch of scratches.splice(0)) rmSync(scratch, { recursive: true, force: true });
 });
 
 function check(tests: { title: string; status: string }[]): { exitCode: number; output: string } {
-  scratch = mkdtempSync(join(tmpdir(), 'rule-coverage-'));
+  const scratch = mkdtempSync(join(tmpdir(), 'rule-coverage-'));
+  scratches.push(scratch);
   const file = join(scratch, 'report.json');
   writeFileSync(file, JSON.stringify({ testResults: [{ assertionResults: tests }] }));
   try {

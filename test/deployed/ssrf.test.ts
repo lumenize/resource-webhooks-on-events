@@ -1,8 +1,9 @@
 // The SSRF measurement rerun through A's own two fetches: each handshake a subscribe makes, A's
 // https POST from a Durable Object, and each client ID metadata document an authorization request
-// names, A's GET. Each goes to a name that sslip.io, nip.io or 1u.ms resolves. A reports on its
-// back channel why each failed, by the error code of Cloudflare's own page or the failure, and
-// `results/ssrf-outcomes.json` keeps the run's outcomes.
+// names, A's GET. Most go to a name that sslip.io, nip.io or 1u.ms resolves, and a few to a bare
+// address or `localhost`. A reports on its back channel why each failed, by the error code of
+// Cloudflare's own page or the failure, and `results/ssrf-outcomes.json` and
+// `results/ssrf-document-outcomes.json` keep each run's outcomes.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { McpError } from '../../src/client/mcp-client';
@@ -84,15 +85,18 @@ describe("SSRF through A's document fetch", () => {
     for (const [name] of REFUSED) refused.push(await outcome(name));
     const reached: Outcome[] = [];
     for (const name of REACHED) reached.push(await outcome(name));
+    const timedOut: Outcome[] = [];
+    for (const name of TIMED_OUT) timedOut.push(await outcome(name));
     // A public URL whose answer is a redirect to a private one, which A takes as no document.
     // postman-echo.com, since httpbin.org answers a Worker's fetch with 403 of its own.
     const redirecting = `https://postman-echo.com/redirect-to?url=${encodeURIComponent('https://10.0.0.1.sslip.io/client.json')}`;
     const redirect = await documentFetch(tier, page, redirecting);
     mkdirSync('results', { recursive: true });
-    writeFileSync('results/ssrf-document-outcomes.json', JSON.stringify([...refused, ...reached, redirect], null, 1));
+    writeFileSync('results/ssrf-document-outcomes.json', JSON.stringify([...refused, ...reached, ...timedOut, redirect], null, 1));
 
     for (const [index, [name, code]] of REFUSED.entries()) expect({ name, ...refused[index] }).toMatchObject({ name, errorCode: code });
     for (const [index, name] of REACHED.entries()) expect({ name, ...reached[index] }).toMatchObject({ name, errorCode: 526 });
+    for (const [index, name] of TIMED_OUT.entries()) expect({ name, ...timedOut[index] }).toMatchObject({ name, failure: 'timeout' });
     expect(redirect).toEqual({ url: redirecting, status: 302 });
   });
 });
@@ -116,7 +120,7 @@ describe("SSRF through A's handshake", () => {
     for (let n = 0; n < 12; n++) {
       rebinding.push(await outcome(`${crypto.randomUUID().slice(0, 8)}-make-142.251.156.119-rebindfor60safter1times-10.0.0.1-rr.1u.ms`));
     }
-    // Saved before any assertion, so a failing run leaves its record too.
+    // Saved before the checks below, so a run that fails one leaves its record too.
     mkdirSync('results', { recursive: true });
     writeFileSync('results/ssrf-outcomes.json', JSON.stringify([...refused, ...reached, ...timedOut, ...rebinding], null, 1));
 

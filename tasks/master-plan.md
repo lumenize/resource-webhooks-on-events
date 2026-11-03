@@ -964,7 +964,7 @@ Residuals to know of:
 
 ### Phase 7
 
-**For Larry.** Nothing needs a decision before Phase 8. New in code: the `Copies` class and its entry points, `watch`, `event`, `trigger`, `refresh`, `wrote` and `poll`, and the client's log, whose entries are `event`, `trigger`, `started over` and `read failed`. `PATCH_MIME_TYPES` names the one format the client applies. The test gate, `test/lane/gate.ts`, is a test helper.
+**For Larry.** Nothing needs a decision before Phase 8. New in code: the `Copies` class and its entry points, `watch`, `event`, `trigger`, `refresh`, `wrote` and `poll`, and the client's log, whose entries are `event`, `trigger`, `started over`, `read failed` and, since the verifier's fixes, `poll failed`. `PATCH_MIME_TYPES` names the one format the client applies. The test gate, now `test/client/gate.ts`, since the deployed scenario uses it too, is a test helper.
 
 Choices the phase made where the task file left one open:
 
@@ -990,6 +990,17 @@ Choices the phase made where the task file left one open:
 - R23's, for applying R15 to a read's pages, in the harness, for dropping every unnamed copy, and for dropping another collection's.
 - R8's, for moving only the uri-specification caught up. The polling test, for waiting while `hasMore` is true, and for polling with no floor.
 
+**The verifier's findings,** fixed in a commit of their own after Phase 8's, with Phase 8's:
+
+- R8's move and R23's drop together lost a copy. When a wider uri-specification caught up while a narrower one was subscribing, the narrower's catch-ups started from the moment the wider had moved it to, skipped what had changed since its read, and then dropped the copy the wider had just brought. The catch-ups after a read now keep their own `from`, starting at the read's `nextFrom`, and drop against it. A harness test feeds that order by hand.
+- A `watch` whose read failed stayed in the map with no moment, so every later event and trigger asked A to catch up from `undefined`. A failed watch now leaves nothing watched, and a second `watch` of one uri-specification waits for the first rather than replacing its queue.
+- The polling loop added an abort listener each time round and never removed one, missed an abort that came during a run, took a `nextPollMs` that is not a number as no wait at all, and ended at the first failed catch-up. Each is fixed: a failed run is logged as `poll failed`, and the next comes after the floor. One harness test covers the failure and the `NaN`, and another the abort during a run and the listener.
+- The lane-paged R16 test could pass with runs that overlap, since it counted catch-ups and never looked at their `from`. It now asserts that the event's catch-up starts where the run ended. The criterion's "then waits `nextPollMs`" in lane-paged had no test, and now has one that polls.
+- The lane-body-limit R11 test never showed that the event left `changes` out. It now does, and holds the event's catch-up at its reply to show nothing is logged until the catch-up ends.
+- Nits: a patched copy kept the read's `_meta` revision, and now takes the patch's. A read item with no `_meta` revision got the string `"undefined"`, which sorts after every moment, and now gets the empty string. Five comments in `copies.ts` and four in its tests said more than the code does.
+- Mutation checks, each turning only its test red: catching up from the shared moment after a read, keeping a failed watch, ending the poll at a failure, taking a `nextPollMs` that is no number as the wait, logging the event before its catch-up ends, overlapping runs in lane-paged, and, in the poll test of its own, waiting after an abort during a run and keeping each abort listener.
+- Residual: R19's test asserts that the client stays at `from` after a patch it can't apply, and no mutation turns that assertion red alone.
+
 **Close-out.** The suite is 443 tests in 34 files, all passing, three of them Phase 8's rule-coverage tests, which the closing run included. Both conformance suites pass. `build-checks.test.ts` lists `src/client/copies.ts` among the modules Node loads with types stripped, as Phase 1 left for this phase.
 
 ### Phase 8
@@ -1006,7 +1017,7 @@ Choices the phase made where the task file left one open:
 **Retro.**
 
 - The deploy took 3 s to reach A and B, since nothing ran the previous version.
-- A's document fetch met the same Cloudflare error codes as its webhook POSTs, on 2026-11-03: 1016 for every name that resolves to a private, loopback, link-local or unspecified address, 1002 for the other special-purpose ranges, 1003 for a bare address or `localhost`, and 526 for the reached control. So design item 5, that the document fetch needs no SSRF check of A's own, holds as measured. `results/ssrf-document-outcomes.json` keeps the run.
+- A's document fetch met the same outcome as its webhook POSTs for each of the 30 names both tried, on 2026-11-03. Cloudflare answered 1016 for a private, loopback, link-local or unspecified address, and for `255.255.255.255`. It answered 1002 for the other special-purpose ranges it refuses, `::ffff:127.0.0.1` among them, 1003 for a bare address or `localhost`, and 526 for the reached control. `192.0.0.1`, `192.0.0.8` and `192.0.2.1` timed out on both fetches, so A reached nothing there either. So design item 5, that the document fetch needs no SSRF check of A's own, holds as measured. `results/ssrf-document-outcomes.json` keeps the run.
 - httpbin.org answers a Worker's fetch with a 403 of its own, so the redirect case first tested nothing. postman-echo.com redirects, and A reported its 302 and fetched nothing after it.
 - The scenario checked B's report of the event as soon as the event reached `b`. On Cloudflare, the report can reach the page after the event, so the scenario now waits for it. The lane never showed the race.
 
@@ -1015,6 +1026,16 @@ Choices the phase made where the task file left one open:
 - With R17's only test renamed, all 443 tests pass, and the coverage check fails naming R17.
 - With `CONFORMANCE` set in `wrangler.jsonc`, `build-checks.test.ts`'s config test and its bundle test both go red.
 - A webhook URL or document at `10.0.0.1` reaching its receiver can't be made locally, since Cloudflare's egress decides it. The SSRF tests pin each code, so an address that reached its receiver would answer with another.
+
+**The verifier's findings,** fixed in a commit of their own after this phase's, with Phase 7's:
+
+- The scenario fell short of § *A simple happy path*. One client subscribed, its read found nothing, no catch-up came between the subscribe and the write, and the writer kept no copies, so R11's skip never showed. Now X and Y each read three tickets, subscribe and catch up. Y closes ticket-3 and skips its own event, and X catches up with a merge patch. It runs in the lane and on the deployed Worker. Since the deployed scenario uses the gate, the gate moved to `test/client/gate.ts`. Its first deployed run failed: the client logged an event's outcome before the catch-up it brings, which the lane had never shown, and it now logs after.
+- The document SSRF test left out the three addresses that time out on webhooks, the only ones Cloudflare doesn't refuse. It now runs them, and the code categories in the Retro above now fit the results.
+- The left-behind scan matched references only, so an unreferenced `targets.ts` or `notes-http.ts` would pass. A test now checks that the four replaced files are gone.
+- Nits: the coverage check's default file is now `results/test-results.json`, the coverage test leaves no scratch directory behind, and five comments in the deployed tests said more than the code does, two of them citing `sep-notes.md`, which this repo doesn't have.
+- Mutation checks, each turning only its test red: the scenario with the writer catching up on its own event, and with the client offering no patch format. The left-behind file test fails naming all four files when `SCAN_ROOT` points at the first flavor's tree.
+- Residuals: `npm test -- <filter>` hands the filter to the coverage check, not to vitest, so the whole suite runs and the filter is ignored. Run one file with `npx vitest run --project <project> <file>`. `conformance-baseline.yml` still lists `tools-call-with-progress`, carried from the first flavor in Phase 1 with its reason. The criterion asks the proof to leave out a rule no comment mentions, and a comment in `writes.test.ts` mentions R17. The check reads titles only, so the proof stands, on a report written by hand, as the choices above say.
+- With these fixes and Phase 7's, the suite is 455 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test, and both conformance suites pass. The deployed tier passed its four tests with every change to code in, and only a comment and one harness test came after.
 
 **Close-out.** The suite is 443 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test. Both conformance suites pass, and the deployed tier passes its four tests on `test-resource-webhooks-on-events`. `src/` holds no `resources/webhooks/` method, no `'mcp.resource.updated'`, no `targets.ts` and no `notes-http.ts`.
 

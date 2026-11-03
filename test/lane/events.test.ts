@@ -62,7 +62,7 @@ async function withMovableClock<T>(body: () => Promise<T>): Promise<T> {
 }
 
 describe('the scenario', () => {
-  it('lists the event, subscribes after the handshake, delivers one event for a write, catches up, and reports it all redacted', () => eventsScenario(newLane()));
+  it("takes the proposal's simple happy path: two clients read, subscribe and catch up, one writes, both hear it, and the other catches up with a patch", () => eventsScenario(newLane()));
 });
 
 describe('B, with A delivering', () => {

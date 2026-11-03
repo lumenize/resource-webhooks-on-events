@@ -1,19 +1,21 @@
-// The extension's scenario over SEP-3415's Events, run against any tier: the lane's Worker, or a
-// deployed one through the same client. It speaks only HTTP and WebSocket, through the parties'
-// module, and follows the proposal's happy path: read, subscribe, write, hear, catch up.
+// The proposal's § *A simple happy path*, run against any tier: the lane's Worker, or a deployed
+// one through the same client. It speaks only HTTP and WebSocket, through the parties' module, and
+// its two clients, X and Y, keep their copies with `src/client/copies.ts`.
 import { expect, vi } from 'vitest';
-import type { CatchUpCollectionResult, ReadCollectionResult, WriteResourceResult } from '../../src/extension-types';
-import { SERVER_INFO } from '../../src/server-role/server-role';
-import { listen, NETWORK_WAIT, signedIn, subscribe, watch, type Tier } from '../client/parties';
+import type { WriteResourceResult } from '../../src/extension-types';
+import { gatedClient } from '../client/gate';
+import { NETWORK_WAIT, signedIn, watch, type Tier } from '../client/parties';
 
 const EVENT = 'mcp.resource.collection.updated';
+const json = (value: object) => ({ mimeType: 'application/json', text: JSON.stringify(value) });
 
 /**
- * A lists `mcp.resource.collection.updated`, `b` reads `tickets/{id}` and subscribes after
- * SEP-3415's handshake with B, a ticket `a` creates reaches `b` as one event naming it, `b`
- * catches up and gets it, `a` closes it and `b` catches up with a patch, and the back channel
- * reports it all redacted. It starts with the page's
- * Wipe, as the demo does, so a deployed A carries nothing between runs.
+ * A holds ticket-3, and ticket-7 and ticket-9, which closing ticket-7 as a duplicate of ticket-9
+ * changed at one moment. X and Y each read `tickets/{id}`, subscribe after SEP-3415's handshake
+ * with B, and catch up (steps 1 to 3). Y closes ticket-3 (step 4), A sends both the event (step
+ * 5), Y skips it, holding its own write, and X catches up with a merge patch (step 6). The back
+ * channel reports it all redacted. It starts with the page's Wipe, as the demo does, so a
+ * deployed A carries nothing between runs.
  */
 export async function eventsScenario(tier: Tier): Promise<void> {
   const pageA = await watch(tier, 'A');
@@ -21,43 +23,72 @@ export async function eventsScenario(tier: Tier): Promise<void> {
   expect(await pageA.control('wipe')).toMatchObject({ type: 'done', action: 'wipe' });
   expect(await pageB.control('wipe')).toEqual({ type: 'done', action: 'wipe' });
   const a = await signedIn(tier, 'a');
-  const b = await signedIn(tier, 'b');
-  const template = { uriTemplate: `${tier.root}/tickets/{id}` };
-  // A ticket of this run's own, though the Wipe left none.
-  const uri = `${tier.root}/tickets/ticket-${crypto.randomUUID().slice(0, 8)}`;
+  const uri = (id: string) => `${tier.root}/tickets/${id}`;
+  const write = (method: string, id: string, value: object, ifMatch?: string) =>
+    a.client.request<WriteResourceResult>(method, { uri: uri(id), contents: { uri: uri(id), ...json(value) }, ...(ifMatch ? { ifMatch } : {}) });
+  const three = await write('resources/create', 'ticket-3', { title: 'Printer jams', status: 'open' });
+  await write('resources/create', 'ticket-9', { title: 'Paper out', status: 'open' });
+  const seven = await write('resources/create', 'ticket-7', { title: 'Paper out again', status: 'open' });
+  const duplicate = await write('resources/update', 'ticket-7', { title: 'Paper out again', status: 'closed', duplicateOf: 'ticket-9' }, seven.revision);
+  expect(new Set(duplicate.changes.map(({ revision }) => revision)).size).toBe(1);
 
-  const { events } = await b.client.request<{ resultType: 'complete'; events: { name: string; delivery: string[] }[] }>('events/list');
+  const { events } = await a.client.request<{ resultType: 'complete'; events: { name: string; delivery: string[] }[] }>('events/list');
   expect(events.map(({ name, delivery }) => ({ name, delivery }))).toEqual([{ name: EVENT, delivery: ['webhook'] }]);
 
-  const read = await b.client.request<ReadCollectionResult>('resources/collection/read', template);
-  expect(read.contents).toEqual([]);
-  const listener = await listen(tier, b);
-  const subscribed = await subscribe(b, template, listener.hookUrl, listener.secret);
-  expect(subscribed).toEqual({
-    resultType: 'complete',
-    id: expect.stringMatching(/^sub_[0-9a-f]{16}$/),
-    refreshBefore: expect.stringMatching(/^\d{4}-\d\d-\d\dT/),
-    cursor: null,
-    truncated: false,
-    _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO },
-  });
+  // Steps 1 to 3: each reads the collection, subscribes, and catches up, and holds every ticket.
+  const template = { uriTemplate: uri('{id}') };
+  const x = await gatedClient(tier, 'x');
+  const y = await gatedClient(tier, 'y');
+  for (const client of [x, y]) {
+    await client.copies.watch(template);
+    expect(client.gate.sent.filter((method) => method.startsWith('resources/collection/') || method === 'events/subscribe')).toEqual([
+      'resources/collection/read',
+      'events/subscribe',
+      'resources/collection/catchup',
+    ]);
+    expect(Object.fromEntries([...client.copies.copies()].map(([key, copy]) => [key, copy.revision]))).toEqual({
+      [uri('ticket-3')]: three.revision,
+      [uri('ticket-7')]: duplicate.revision,
+      [uri('ticket-9')]: duplicate.revision,
+    });
+    expect(client.copies.caughtUpTo(template)).toBe(duplicate.revision);
+  }
 
-  const contents = { uri, mimeType: 'application/json', text: JSON.stringify({ title: 'Printer jams', status: 'open' }) };
-  const created = await a.client.request<WriteResourceResult>('resources/create', { uri, contents });
-  await vi.waitFor(() => expect(listener.deliveries()).toHaveLength(1), NETWORK_WAIT);
-  const [delivery] = listener.deliveries();
-  expect(delivery.subscriptionId).toBe(subscribed.id);
+  // Step 4: Y closes ticket-3, and takes what it sent as its copy, staying caught up to where it
+  // was (R9). Y holds the event until its reply is in, so step 6 shows the writer's skip.
+  y.forward(false);
+  const closed = { uri: uri('ticket-3'), ...json({ title: 'Printer jams', status: 'closed' }) };
+  const reply = await y.party.client.request<WriteResourceResult>('resources/update', { uri: uri('ticket-3'), contents: closed, ifMatch: three.revision });
+  y.copies.wrote(uri('ticket-3'), closed, reply.changes);
+  expect(y.copies.caughtUpTo(template)).toBe(duplicate.revision);
+
+  // Step 5: A sends each one event naming the change, and none of the ticket's contents.
+  await vi.waitFor(() => expect([x.listener.deliveries().length, y.held.length]).toEqual([1, 1]), NETWORK_WAIT);
+  const [delivery] = x.listener.deliveries();
   expect(delivery.webhookId).toMatch(/^msg_[A-Za-z0-9]{24}$/);
   expect(delivery.body).toEqual({
-    eventId: created.revision,
+    eventId: reply.revision,
     name: EVENT,
     timestamp: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/),
-    data: { ...template, changes: created.changes },
+    data: { ...template, changes: [{ uri: uri('ticket-3'), effect: 'updated', previousRevision: three.revision, revision: reply.revision }] },
     cursor: null,
   });
-  // B answered A's challenge before the event reached it. On Cloudflare, B's report of the event
-  // can reach the page after the event reaches b.
-  const client = listener.hookUrl.split('/hooks/')[1];
+
+  // Step 6: Y holds the one change at its revision, so it skips the catch-up (R11). X doesn't, so
+  // it catches up from where it is, gets a merge patch, and applies it (R19).
+  await y.copies.event(y.held[0]);
+  expect(y.log).toContainEqual({ kind: 'event', eventId: reply.revision, outcome: 'skipped' });
+  await vi.waitFor(() => expect(x.log).toContainEqual({ kind: 'event', eventId: reply.revision, outcome: 'caught up' }), NETWORK_WAIT);
+  const lastCatchUp = x.gate.requests.filter(({ method }) => method === 'resources/collection/catchup').at(-1)!;
+  expect(lastCatchUp.params).toMatchObject({ from: duplicate.revision, patchMimeTypes: ['application/merge-patch+json'] });
+  expect(x.copies.copy(uri('ticket-3'))?.revision).toBe(reply.revision);
+  expect(JSON.parse((x.copies.copy(uri('ticket-3'))!.contents as { text: string }).text)).toEqual({ title: 'Printer jams', status: 'closed' });
+  expect(x.copies.caughtUpTo(template)).toBe(reply.revision);
+  expect(y.copies.caughtUpTo(template)).toBe(duplicate.revision);
+
+  // B answered A's challenge before the event reached X. On Cloudflare, B's report of the event
+  // can reach the page after the event reaches X.
+  const client = x.listener.hookUrl.split('/hooks/')[1];
   const received = () => pageB.reports().filter((report) => report.kind === 'delivery' && report.client === client);
   await vi.waitFor(
     () =>
@@ -67,21 +98,6 @@ export async function eventsScenario(tier: Tier): Promise<void> {
       ]),
     NETWORK_WAIT,
   );
-  // b doesn't hold the ticket, so it catches up from its read's nextFrom (R11).
-  const caught = await b.client.request<CatchUpCollectionResult>('resources/collection/catchup', { ...template, from: read.nextFrom, patchMimeTypes: ['application/merge-patch+json'] });
-  expect(caught.changes).toEqual([{ uri, effect: 'created', revision: created.revision, contents }]);
-
-  // a closes the ticket, as step 4 does, and b catches up from where it is, getting a patch (R19).
-  const closed = { uri, mimeType: 'application/json', text: JSON.stringify({ title: 'Printer jams', status: 'closed' }) };
-  const updated = await a.client.request<WriteResourceResult>('resources/update', { uri, contents: closed, ifMatch: created.revision });
-  await vi.waitFor(() => expect(listener.deliveries()).toHaveLength(2), NETWORK_WAIT);
-  expect(listener.deliveries()[1].body).toMatchObject({ eventId: updated.revision, data: { ...template, changes: updated.changes } });
-  const again = await b.client.request<CatchUpCollectionResult>('resources/collection/catchup', { ...template, from: caught.nextFrom, patchMimeTypes: ['application/merge-patch+json'] });
-  expect(again).toMatchObject({
-    changes: [{ uri, effect: 'updated', previousRevision: created.revision, revision: updated.revision, patchMimeType: 'application/merge-patch+json', patch: { status: 'closed' } }],
-    hasMore: false,
-    nextFrom: updated.revision,
-  });
 
   // The Wipes passed over the same channels, and nothing secret came back on either. Each check
   // reports a boolean, so a failure prints no secret it found.
@@ -91,7 +107,8 @@ export async function eventsScenario(tier: Tier): Promise<void> {
   expect(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\./.test(everything)).toBe(false);
   expect(everything.includes(tier.operatorToken!)).toBe(false);
   expect(everything.includes('"control"')).toBe(false);
-  listener.close();
+  x.listener.close();
+  y.listener.close();
   pageA.close();
   pageB.close();
 }
