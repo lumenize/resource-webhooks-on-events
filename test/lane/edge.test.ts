@@ -7,7 +7,7 @@ const EVIL = 'https://evil.example';
 const ENVELOPE = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
 
 function metadataPaths(lane: { name: string }): string[] {
-  return [`/.well-known/oauth-protected-resource/server/${lane.name}/mcp`, '/.well-known/oauth-authorization-server'];
+  return [`/.well-known/oauth-protected-resource/server/${lane.name}/mcp`, '/.well-known/oauth-authorization-server', '/client.json'];
 }
 
 async function serverIds(): Promise<string[]> {
@@ -85,6 +85,9 @@ it('routes only the instance it names, and only the paths and methods its table 
     // The first flavor's notes route is gone.
     ['GET', `/server/${lane.name}/notes/ticket-3`],
     ['GET', '/gateway/B/ws/b'],
+    // A hook names a subject and an instance, and registration is by document alone.
+    ['POST', '/gateway/B/hooks/b'],
+    ['POST', '/register'],
     ['GET', '/nowhere'],
   ];
   for (const [method, path, init] of refused) {

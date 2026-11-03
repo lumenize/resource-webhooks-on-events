@@ -1,6 +1,7 @@
 // A token for A's MCP endpoint, got through the real OAuth flow against a Worker under
 // wrangler's test harness, the way any client gets one.
 import type { createTestHarness } from 'wrangler';
+import { clientMetadataUrl } from '../../src/auth/metadata';
 import { OAuthSession } from '../../src/client/mcp-client';
 
 /** The signing secret the harness Workers run with, for tests only. */
@@ -10,6 +11,6 @@ export function signIn(server: ReturnType<typeof createTestHarness>, origin: str
   // The harness answers with Node's Response, which the client reads the same way.
   const send = ((input: RequestInfo | URL, init?: RequestInit) =>
     server.fetch(String(input instanceof Request ? input.url : input), init as never)) as unknown as typeof fetch;
-  const session = new OAuthSession({ redirectUri: `${origin}/callback`, fetch: send });
+  const session = new OAuthSession({ redirectUri: `${origin}/callback`, clientMetadataUrl: clientMetadataUrl(origin), fetch: send });
   return session.tokenFor(`${origin}/server/${instance}/mcp`);
 }

@@ -1,8 +1,11 @@
 // The parties of the scenarios: `a`, the writer, `b`, which subscribes and listens on its socket to
 // B, and the page, which watches A's and B's back channels. They speak only HTTP and WebSocket to
 // a tier, the lane's Worker or a deployed one, so a scenario runs unchanged against either. Each of
-// `a` and `b` is its own OAuth client of A, so each is its own principal.
+// `a` and `b` is its own browser, an OAuth session keeping its own cookie, so each signs in as an
+// account of its own, its own principal, under the Worker's one client ID metadata document.
 import { expect, vi } from 'vitest';
+import { clientMetadataUrl } from '../../src/auth/metadata';
+import { fromBase64url } from '../../src/auth/signing';
 import { createMcpClient, OAuthSession, type McpClient } from '../../src/client/mcp-client';
 import { newSecret } from '../../src/standard-webhooks';
 
@@ -77,34 +80,42 @@ export function closeEverySocket(): void {
 export interface Party {
   client: McpClient;
   session: OAuthSession;
-  clientId: string;
+  /** The account A signed this party in as, its tokens' `sub`, as `u_7Hq2…`. */
+  sub: string;
+  /** The running copy B serves this party as, which its socket's path names, as `i_Kp3…`. */
+  instance: string;
 }
 
 /** A client of A that has signed in, as a principal of its own. */
 export async function signedIn(tier: Tier, name: string): Promise<Party> {
   const send = (input: RequestInfo | URL, init?: RequestInit) => tier.send(new Request(input, init));
-  const session = new OAuthSession({ redirectUri: `${tier.origin}/callback`, clientName: name, fetch: send });
+  const session = new OAuthSession({ redirectUri: `${tier.origin}/callback`, clientMetadataUrl: clientMetadataUrl(tier.origin), fetch: send });
   const client = createMcpClient({ endpoint: `${tier.root}/mcp`, clientInfo: { name, version: '0.0.0' }, oauth: session, fetch: send });
-  await session.tokenFor(`${tier.root}/mcp`);
-  return { client, session, clientId: session.clientIdFor(tier.origin)! };
+  const token = await session.tokenFor(`${tier.root}/mcp`);
+  return { client, session, sub: subOf(token), instance: `i_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}` };
 }
 
-/** A client's socket URL on B, as `.../gateway/B/ws/{clientId}`. */
-export function socketUrl(tier: Tier, clientId: string): string {
-  return `${tier.origin}/gateway/${tier.gateway}/ws/${clientId}`;
+/** The `sub` a token of A's carries, which a test reads to name a hook URL before any socket opens. */
+export function subOf(token: string): string {
+  return (JSON.parse(new TextDecoder().decode(fromBase64url(token.split('.')[1]))) as { sub: string }).sub;
 }
 
-/** A client's webhook URL on B, the `delivery.url` it subscribes with. */
-export function hookUrl(tier: Tier, clientId: string): string {
-  return `${tier.origin}/gateway/${tier.gateway}/hooks/${clientId}`;
+/** A client's socket URL on B, as `.../gateway/B/ws/{instance}`. */
+export function socketUrl(tier: Tier, instance: string): string {
+  return `${tier.origin}/gateway/${tier.gateway}/ws/${instance}`;
+}
+
+/** A party's webhook URL on B, as `.../gateway/B/hooks/{sub}/{instance}`, which B tells its socket. */
+export function hookUrl(tier: Tier, party: Pick<Party, 'sub' | 'instance'>): string {
+  return `${tier.origin}/gateway/${tier.gateway}/hooks/${party.sub}/${party.instance}`;
 }
 
 /**
- * Waits until B holds no socket for the client, as after it closed its own. An unsigned POST to
- * the client's hook answers `503` then, and `401` while a socket is open.
+ * Waits until B holds no socket for the party, as after it closed its own. An unsigned POST to
+ * the party's hook answers `503` then, and `401` while a socket is open.
  */
-export async function untilClosed(tier: Tier, clientId: string): Promise<void> {
-  await vi.waitFor(async () => expect((await tier.send(new Request(hookUrl(tier, clientId), { method: 'POST', body: '{}' }))).status).toBe(503), NETWORK_WAIT);
+export async function untilClosed(tier: Tier, party: Party): Promise<void> {
+  await vi.waitFor(async () => expect((await tier.send(new Request(hookUrl(tier, party), { method: 'POST', body: '{}' }))).status).toBe(503), NETWORK_WAIT);
 }
 
 export interface Listener {
@@ -125,9 +136,10 @@ export interface Listener {
 /**
  * Opens a client's socket to B with a token for that socket, a new one unless given one, pings
  * on B's heartbeat as `b` does, and registers a secret on it, waiting for B's acknowledgement.
+ * The hook URL is the one B tells the socket as it opens.
  */
 export async function listen(tier: Tier, party: Party, { secret = newSecret(), token }: { secret?: string; token?: string } = {}): Promise<Listener> {
-  const url = socketUrl(tier, party.clientId);
+  const url = socketUrl(tier, party.instance);
   const socket = await tier.connect(url, ['rw.1', `rw.token.${token ?? (await party.session.tokenForResource(tier.origin, url))}`]);
   expect(socket.protocol).toBe('rw.1');
   const messages: Record<string, unknown>[] = [];
@@ -164,10 +176,12 @@ export async function listen(tier: Tier, party: Party, { secret = newSecret(), t
     );
   };
   await register(secret);
+  const hook = messages.find(({ type }) => type === 'hook');
+  expect(hook).toEqual({ type: 'hook', hookUrl: hookUrl(tier, party) });
   return {
     closes,
     secret,
-    hookUrl: hookUrl(tier, party.clientId),
+    hookUrl: hook!.hookUrl as string,
     deliveries: () =>
       messages
         .filter((message) => message.type === 'delivery')

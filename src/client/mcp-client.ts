@@ -153,8 +153,8 @@ export function headerValue(value: string): string {
 }
 
 // The client half of MCP's authorization: from a 401's WWW-Authenticate, or the well-known
-// URIs, to the protected resource's metadata, its authorization server's metadata, a
-// registration, the code flow with PKCE, and a token for exactly the resource the metadata names.
+// URIs, to the protected resource's metadata, its authorization server's metadata, a client id,
+// the code flow with PKCE, and a token for exactly the resource the metadata names.
 
 export interface ClientCredentials {
   /** The authorization server that issued them. Without it, they are bound to the first one met. */
@@ -164,11 +164,16 @@ export interface ClientCredentials {
 }
 
 export interface OAuthOptions {
-  /** The redirect URI the client registers and is sent back to. */
+  /** The redirect URI the client's document lists or it registers, and is sent back to. */
   redirectUri: string;
   clientName?: string;
   /** Credentials registered beforehand, used in place of registering, with their issuer only. */
   client?: ClientCredentials;
+  /**
+   * The URL of the client ID metadata document the client names itself by, as
+   * `https://…/client.json`, used as its client id wherever the authorization server supports one.
+   */
+  clientMetadataUrl?: string;
   /**
    * Opens the authorization URL and answers the URL the authorization server sent the browser
    * back to. The default reads the first redirect with `fetch`, which works in a script where
@@ -184,6 +189,7 @@ interface ServerMetadata {
   authorization_endpoint: string;
   token_endpoint: string;
   registration_endpoint?: string;
+  client_id_metadata_document_supported?: boolean;
   token_endpoint_auth_methods_supported?: string[];
   code_challenge_methods_supported?: string[];
   authorization_response_iss_parameter_supported?: boolean;
@@ -211,6 +217,9 @@ export class OAuthSession {
   // Tokens per endpoint or resource they were got for, and the scope each was asked for.
   readonly #tokens = new Map<string, string>();
   readonly #scopes = new Map<string, Set<string>>();
+  // The cookies each authorization endpoint's origin set, by name, kept as a browser keeps them,
+  // so a server that knows a browser by its cookie knows this session the same way.
+  readonly #cookies = new Map<string, Map<string, string>>();
 
   constructor(options: OAuthOptions) {
     this.#options = options;
@@ -262,11 +271,6 @@ export class OAuthSession {
       this.#clients.delete(server.issuer);
       return this.#codeFlow(server, await this.#client(server), resource, scope);
     }
-  }
-
-  /** The client id this session registered with `issuer`, once it has. */
-  clientIdFor(issuer: string): string | undefined {
-    return this.#clients.get(issuer)?.clientId;
   }
 
   async #resourceMetadata(
@@ -322,6 +326,9 @@ export class OAuthSession {
     if (preRegistered && issuerOfPreRegistered === server.issuer) {
       this.#preRegisteredIssuer = server.issuer;
       client = { ...preRegistered, method: preRegistered.clientSecret ? method : 'none', registered: false };
+    } else if (this.#options.clientMetadataUrl && server.client_id_metadata_document_supported) {
+      // The spec's order: pre-registered credentials, then a document, then registration.
+      client = { clientId: this.#options.clientMetadataUrl, method: 'none', registered: false };
     } else {
       if (!server.registration_endpoint) throw new OAuthError('The authorization server offers no registration');
       const response = await this.#fetch(server.registration_endpoint, {
@@ -399,7 +406,16 @@ export class OAuthSession {
   }
 
   async #followRedirect(url: string): Promise<string> {
-    const response = await this.#fetch(url, { redirect: 'manual' });
+    const { origin } = new URL(url);
+    const jar = this.#cookies.get(origin) ?? new Map<string, string>();
+    const cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+    const response = await this.#fetch(url, { redirect: 'manual', ...(cookie ? { headers: { Cookie: cookie } } : {}) });
+    for (const set of response.headers.getSetCookie()) {
+      const [pair] = set.split(';');
+      const at = pair.indexOf('=');
+      if (at > 0) jar.set(pair.slice(0, at).trim(), pair.slice(at + 1).trim());
+    }
+    if (jar.size > 0) this.#cookies.set(origin, jar);
     const location = response.headers.get('Location');
     if (response.status < 300 || response.status >= 400 || !location) {
       const text = await response.text();

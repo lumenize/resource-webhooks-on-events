@@ -499,13 +499,13 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 **Goal.** Registration as MCP 2026-07-28 prefers, so every later test signs in the way the spec asks. It builds the first flavor's design, `tasks/prototype-matches-the-proposal.md` § *Registration by Client ID Metadata Document*, items 1 to 7, with "per epoch" read as per Wipe, and with the changes below.
 
-**What comes in.** `src/auth/` and `src/client/mcp-client.ts`, adapted where Phase 1 left them, with `src/edge.ts`'s `socketGuard`, `GATEWAY_ROUTES` and a `/client.json` route, `src/gateway.ts`'s socket tags, `src/server.ts`'s `resourcesFor`, `test/client/parties.ts`'s `socketUrl` and `hookUrl`, and `test/lane/lane.ts`'s `laneEnvFor`, which routes the document's path. `authorization.test.ts`'s cases for DCR alone, its client secret, its `/register` body and redirect rule and its `429`, are recast onto documents or dropped with `/register`.
+**What comes in.** `src/auth/` and `src/client/mcp-client.ts`, adapted where Phase 1 left them, with `src/edge.ts`'s `socketGuard`, `GATEWAY_ROUTES` and a `/client.json` route, `src/gateway.ts`'s socket tags, `src/server.ts`'s `resourcesFor`, and `test/client/parties.ts`'s `socketUrl` and `hookUrl`. `authorization.test.ts`'s cases for DCR alone, its client secret, its `/register` body and redirect rule and its `429`, are recast onto documents or dropped with `/register`.
 
 **How it differs from the first flavor's design.**
 
 - **B tags each socket with the token's `sub` and the instance,** as design item 4 says, and supersedes a socket only for the same `sub` and instance, since the socket's path, `/gateway/B/ws/<instance>`, no longer names the `sub` that `socketGuard` checked.
 - **The account cookie is `HttpOnly; Secure; SameSite=Strict`, with its `Path` set to the authorize endpoint's,** and carries the Wipe count, so a cookie from before a Wipe counts as no cookie. Each code carries the Wipe count too, and the token endpoint refuses a code from before the last Wipe with `invalid_grant`.
-- **A fetches a client ID metadata document as it sends a delivery,** with `redirect: 'manual'` and `ATTEMPT_TIMEOUT_MS`, and takes any `3xx` as an invalid document. It reports each fetch's outcome on its back channel, with Cloudflare's error code as `send` parses it.
+- **A fetches a client ID metadata document as it sends a delivery,** with `redirect: 'manual'` and `ATTEMPT_TIMEOUT_MS`, and takes any `3xx` as an invalid document. The Worker's own clients' document it reads from the code that serves it, since under wrangler's harness its origin is the production host. It reports each fetch's outcome on its back channel, with Cloudflare's error code as `send` parses it.
 - **A refuses a document whose `redirect_uris` aren't all on the Worker's origin or loopback,** as the first flavor's `register` refused such a redirect URI, so a code never goes to another site.
 - **The registration cap is one mechanism,** a count of accounts keyed by the Wipe count, and the Wipe no longer clears it.
 
@@ -696,6 +696,47 @@ A residual to know of: a socket token from before a Wipe of A still opens a sock
 - For the verifier's fixes: the edge keeping a caller's claims header, the metadata routes taking any method, the Wipe count frozen at 0, and the role renaming its unknown-tool error, each turning its new test red.
 
 **Close-out.** The suite is 251 tests in 15 files, all passing. `npm install` warns that npm 11 skipped the install scripts of `esbuild`, `fsevents` and `workerd`, and every lane and harness test runs regardless. The token endpoint's tests log a workerd warning that a form body is read with `.text()`, as the first flavor's did.
+
+### Phase 2
+
+**For Larry.** Nothing needs a decision before Phase 3, though five new names are yours to keep or rename, since they are new terms on surfaces outside both SEPs:
+
+- The message B sends a client's socket as it opens, `{"type": "hook", "hookUrl": ".../gateway/B/hooks/u_7Hq2…/i_Kp3…"}`, which design item 4 asked for without naming.
+- The account cookie, `rw_account`, and its value, `<Wipe count>.<sub>.<signature>`.
+- A's back-channel report of each document fetch, `{"kind": "document", "url", "status"?, "errorCode"?, "failure"?}`, whose `failure` is one of `timeout`, `connection_refused`, `too_large` or `not_json`.
+- The `u_` and `i_` prefixes, from the first flavor's design table, now in code.
+- `REGISTRATION_CAP` keeps its name, though it now caps accounts.
+
+Three things differ from the phase as written, none a design change, and the phase text now says so where it named them:
+
+- A reads the Worker's own clients' document from the code that serves it, and fetches every other. Under wrangler's harness, A's origin is the production host, so a fetch of its own `/client.json` would leave the test. `laneEnvFor` therefore routes no document path, and the fetch is tested with documents served from a fake host.
+- The edge routes B's socket and hook paths only for URL-safe names, `[A-Za-z0-9_-]{1,64}`, the same rule A's authorization server applies to a socket it issues a token for. A malformed path is `404`, where the first flavor answered `401` or `503`.
+- Any subject may open a socket at any instance, since B files it under the token's `sub`. So a token minted for another party's socket URL is no longer refused; it opens a socket of its own beside that party's, which the new ownership test shows.
+
+Residuals to know of:
+
+- A treats every client as public, whatever `token_endpoint_auth_method` its document declares, and ignores a `client_secret` sent to the token endpoint.
+- The document fetch parses Cloudflare's error code with the same pattern the first flavor's delivery `send` used. Phase 6 brings `send` back, and should share one helper with it.
+- A socket token from before a Wipe of A still opens a socket on B, as Phase 1 recorded.
+
+**Retro.**
+
+- Most of the phase was transcription of the first flavor's design. The one decision the design had left open was how A reads its own document, and the harness settled it.
+- B's hook message arrives before the client reads the `101`, which `socketOf` already buffers, so no test needed a wait for it.
+- The conformance client suite also runs scenarios the 2026-07-28 requirements don't count, such as `auth/client-credentials-basic` and `auth/dpop`. They fail, since the client offers neither grant, and the run passes.
+- Two mutations first misled. One was never applied, since its replacement text occurred twice in the file and `mutate.mjs` refused it, which the loop reported as surviving. The other, B filing every socket under one subject, turned six tests red by changing every hook URL. Rerun with a unique edit, and with B superseding by instance alone, each turned exactly its own test red.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red:
+
+- In `authorization.test.ts`, one test each: dropping the `client_id` comparison; dropping the `redirect_uri` check; following the redirect; accepting an off-origin redirect URI; dropping the `client_name` check; accepting an `http` client id, or one with no path; accepting a pre-Wipe code; and a socket resource of any shape.
+- The cookie test, for each of: `SameSite=Lax`, `Path=/`, accepting a pre-Wipe cookie, skipping the cookie's signature, and a token whose `sub` is the client id.
+- The cap test, for dropping the Wipe key and for counting a returning browser. A new account on every grant turns the cookie, cap and client-session tests red.
+- The metadata test, for advertising `registration_endpoint`, for serving no document, and for dropping `client_id_metadata_document_supported`. The last also stops the lane signing in, so three other tests go red with it.
+- The report test, for dropping the error code and for dropping the timeout.
+- In `gateway.test.ts`: B superseding by instance alone turns the ownership test red, and the edge routing any instance the refusal test. Leaving out the hook message turns every test that listens red, since `listen` checks it.
+- In `oauth-client.test.ts`: the client ignoring its document turns the new test red, and leaving out the DCR fallback turns it red with the three DCR tests. In `authorization.test.ts`, the client keeping no cookie turns the client-session test red.
+
+**Close-out.** The suite is 260 tests in 15 files, all passing, and both conformance suites pass. `auth/basic-cimd:cimd-client-id-used` has left `conformance-baseline.yml`. `OAuthSession.clientIdFor` went, since a client id no longer names a principal and nothing called it.
 
 ## Notes kept out of the proposal
 

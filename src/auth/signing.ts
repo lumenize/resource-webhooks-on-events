@@ -1,6 +1,6 @@
 // HMAC-SHA256 signing under the Worker's one signing secret, kept apart by purpose: a label
-// starts every other signed input, so a client id, a client secret and a code can never pass
-// for one another or for a token. Tokens are JWTs with their `alg` pinned to HS256.
+// starts every other signed input, so an account cookie and a code can never pass for one
+// another or for a token. Tokens are JWTs with their `alg` pinned to HS256.
 
 const encoder = new TextEncoder();
 

@@ -74,6 +74,17 @@ describe('the client half of authorization', () => {
     expect(calls.some(({ body }) => body?.includes('pre-registered-secret'))).toBe(false);
   });
 
+  it('names itself by its document where the server supports one, and registers where it does not', async () => {
+    const document = 'https://client.example/client.json';
+    const { send, calls, registrations } = fakeServers({ metadata: { client_id_metadata_document_supported: true, token_endpoint_auth_methods_supported: ['none'] } });
+    expect(await new OAuthSession({ redirectUri: REDIRECT, clientMetadataUrl: document, fetch: send }).tokenFor(`${RS}/mcp`)).toBe(`token-for-${document}`);
+    expect(registrations()).toBe(0);
+    expect(new URLSearchParams(calls.find(({ url }) => url.endsWith('/token'))!.body).has('client_secret')).toBe(false);
+    const { send: older, registrations: registered } = fakeServers();
+    expect(await new OAuthSession({ redirectUri: REDIRECT, clientMetadataUrl: document, fetch: older }).tokenFor(`${RS}/mcp`)).toBe('token-for-client-1');
+    expect(registered()).toBe(1);
+  });
+
   it('registers again, once, when the server has forgotten its client', async () => {
     const { send, registrations } = fakeServers({ forgetClients: 1 });
     const session = new OAuthSession({ redirectUri: REDIRECT, fetch: send });

@@ -14,8 +14,8 @@ import { callWorker, newLane, upgrade, type Lane } from './lane';
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** POSTs a delivery to a client's hook on B, as A would, signed as the caller says. */
-async function postToB(lane: Lane, clientId: string, body: string, headers: Record<string, string>): Promise<Response> {
-  return callWorker(new Request(hookUrl(lane, clientId), { method: 'POST', headers, body }), lane.env);
+async function postToB(lane: Lane, hook: string, body: string, headers: Record<string, string>): Promise<Response> {
+  return callWorker(new Request(hook, { method: 'POST', headers, body }), lane.env);
 }
 
 function signedFor(secret: string, body: string, at = Math.floor(Date.now() / 1000), webhookId = `msg_${crypto.randomUUID().replaceAll('-', '')}`) {
@@ -34,10 +34,10 @@ describe('B, the gateway', () => {
 
     const otherBody = BODY.replace('"x"', '"y"');
     const planted = await signedFor(listener.secret, BODY, undefined, 'msg_<b>planted</b>');
-    expect((await postToB(lane, b.clientId, otherBody, planted)).status).toBe(401);
+    expect((await postToB(lane, hookUrl(lane, b), otherBody, planted)).status).toBe(401);
     const sixMinutesAgo = Math.floor(Date.now() / 1000) - 6 * 60;
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(listener.secret, BODY, sixMinutesAgo))).status).toBe(401);
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(listener.secret, BODY))).status).toBe(200);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(listener.secret, BODY, sixMinutesAgo))).status).toBe(401);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(listener.secret, BODY))).status).toBe(200);
     await vi.waitFor(() => expect(listener.deliveries()).toHaveLength(1));
     expect(listener.deliveries()[0].body).toEqual(JSON.parse(BODY));
 
@@ -50,14 +50,14 @@ describe('B, the gateway', () => {
     ]);
     expect(reports.slice(0, 2).every((report) => !('webhookId' in report) && !('client' in report))).toBe(true);
     expect(page.raw.join('\n')).not.toContain('planted');
-    // A client id is URL-safe, so a malformed escape in the path names no client, and fails no parse.
-    expect((await postToB(lane, '%E0%A4%A', BODY, await signedFor(listener.secret, BODY))).status).toBe(503);
+    // An instance is URL-safe, so the edge routes no other, as a malformed escape, which fails no parse.
+    expect((await postToB(lane, hookUrl(lane, { sub: b.sub, instance: '%E0%A4%A' }), BODY, await signedFor(listener.secret, BODY))).status).toBe(404);
   });
 
   it('refuses a secret that is not whsec_ and 24 to 64 bytes, saying so on the socket', async () => {
     const lane = newLane();
     const b = await signedIn(lane, 'b');
-    const url = socketUrl(lane, b.clientId);
+    const url = socketUrl(lane, b.instance);
     const response = await upgrade(lane.env, url, await b.session.tokenForResource(env.ORIGIN, url));
     const socket = response.webSocket!;
     socket.accept();
@@ -66,8 +66,8 @@ describe('B, the gateway', () => {
       messages.push(JSON.parse(event.data as string));
     });
     socket.send(JSON.stringify({ secret: `whsec_${btoa('x'.repeat(23))}` }));
-    await vi.waitFor(() => expect(messages).toEqual([{ type: 'secret-refused' }]));
-    expect((await postToB(lane, b.clientId, BODY, {})).status).toBe(503);
+    await vi.waitFor(() => expect(messages).toEqual([{ type: 'hook', hookUrl: hookUrl(lane, b) }, { type: 'secret-refused' }]));
+    expect((await postToB(lane, hookUrl(lane, b), BODY, {})).status).toBe(503);
   });
 
   it("answers 503 once b's last ping is two intervals old, with its socket still open", async () => {
@@ -76,31 +76,50 @@ describe('B, the gateway', () => {
     const listener = await listen(lane, b);
     await sleep(Number(env.HEARTBEAT_MS) * 1.2);
     listener.stopPinging();
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(listener.secret, BODY))).status).toBe(200);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(listener.secret, BODY))).status).toBe(200);
     await sleep(Number(env.HEARTBEAT_MS) * 2.2);
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(listener.secret, BODY))).status).toBe(503);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(listener.secret, BODY))).status).toBe(503);
     expect(listener.closes).toEqual([]);
   });
 
-  it('closes the older socket on a reconnect, and uses the newest socket and its secret only', async () => {
+  it('closes the older socket on a reconnect, keeps its hook URL, and uses the newest socket and its secret only', async () => {
     const lane = newLane();
     const b = await signedIn(lane, 'b');
     const older = await listen(lane, b);
     const newer = await listen(lane, b);
     await vi.waitFor(() => expect(older.closes).toEqual([{ code: 4000, reason: 'Superseded by a newer connection' }]));
+    expect(newer.hookUrl).toBe(older.hookUrl);
 
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(older.secret, BODY))).status).toBe(401);
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(newer.secret, BODY))).status).toBe(200);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(older.secret, BODY))).status).toBe(401);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(newer.secret, BODY))).status).toBe(200);
     await vi.waitFor(() => expect(newer.deliveries()).toHaveLength(1));
     expect(older.deliveries()).toEqual([]);
+  });
+
+  it("files a socket under its token's subject, so another's token on the same instance leaves it open", async () => {
+    const lane = newLane();
+    const b = await signedIn(lane, 'b');
+    const c = await signedIn(lane, 'c');
+    expect(c.sub).not.toBe(b.sub);
+    const first = await listen(lane, b);
+    // c opens b's instance with a token of its own for that socket, which B files under c.
+    const second = await listen(lane, { ...c, instance: b.instance });
+    expect(second.hookUrl).toBe(hookUrl(lane, { sub: c.sub, instance: b.instance }));
+
+    expect((await postToB(lane, first.hookUrl, BODY, await signedFor(first.secret, BODY))).status).toBe(200);
+    expect((await postToB(lane, second.hookUrl, BODY, await signedFor(second.secret, BODY))).status).toBe(200);
+    await vi.waitFor(() => expect([first.deliveries().length, second.deliveries().length]).toEqual([1, 1]));
+    // c's secret opens nothing at b's hook.
+    expect((await postToB(lane, first.hookUrl, BODY, await signedFor(second.secret, BODY))).status).toBe(401);
+    expect(first.closes).toEqual([]);
   });
 
   it('closes a socket with 4401 when its token expires', async () => {
     const lane = newLane();
     const b = await signedIn(lane, 'b');
-    const url = socketUrl(lane, b.clientId);
+    const url = socketUrl(lane, b.instance);
     const now = Math.floor(Date.now() / 1000);
-    const token = await signToken(env.TOKEN_SIGNING_KEY, { iss: env.ORIGIN, sub: b.clientId, aud: url, iat: now, exp: now + 2, epoch: 0 });
+    const token = await signToken(env.TOKEN_SIGNING_KEY, { iss: env.ORIGIN, sub: b.sub, aud: url, iat: now, exp: now + 2, epoch: 0 });
     const response = await upgrade(lane.env, url, token);
     expect(response.status).toBe(101);
     const socket = response.webSocket!;
@@ -130,9 +149,9 @@ describe('B, the gateway', () => {
       },
     });
     const watched = { ...lane.env, GATEWAY: recording };
-    const url = socketUrl(lane, b.clientId);
+    const url = socketUrl(lane, b.instance);
     const now = Math.floor(Date.now() / 1000);
-    const mint = (aud: string, exp = now + 60) => signToken(env.TOKEN_SIGNING_KEY, { iss: env.ORIGIN, sub: b.clientId, aud, iat: now, exp, epoch: 0 });
+    const mint = (aud: string, exp = now + 60) => signToken(env.TOKEN_SIGNING_KEY, { iss: env.ORIGIN, sub: b.sub, aud, iat: now, exp, epoch: 0 });
     const own = await b.session.tokenForResource(env.ORIGIN, url);
     const expiring = await mint(url, now + 1);
     await sleep(1100);
@@ -141,14 +160,14 @@ describe('B, the gateway', () => {
     const refused: [string, string | undefined, string][] = [
       ['no token', undefined, url],
       ["b's token for A's MCP endpoint", await b.session.tokenFor(`${lane.root}/mcp`), url],
-      ["b's token, on c's socket", own, socketUrl(lane, c.clientId)],
-      ["a token for c's socket issued to b", await mint(socketUrl(lane, c.clientId)), socketUrl(lane, c.clientId)],
+      ["b's token, on c's socket", own, socketUrl(lane, c.instance)],
       ['an expired token', expiring, url],
-      ['a token for a malformed path, on it', await mint(malformed), malformed],
     ];
     for (const [label, token, at] of refused) {
       expect({ label, status: (await upgrade(watched, at, token)).status }).toEqual({ label, status: 401 });
     }
+    // A path naming no instance A issues tokens for is not routed, whatever the token.
+    expect((await upgrade(watched, malformed, await mint(malformed))).status).toBe(404);
     const withoutSubprotocol = await upgrade(watched, url, own, { 'Sec-WebSocket-Protocol': `rw.token.${own}` });
     expect(withoutSubprotocol.status).toBe(401);
     // Without a token, a 403 rather than a 401 shows the origin is refused before the hook runs.
@@ -191,7 +210,7 @@ describe("The page's controls", () => {
     const listener = await listen(lane, b);
     expect(await page.control('wipe')).toEqual({ type: 'done', action: 'wipe' });
     await vi.waitFor(() => expect(listener.closes).toEqual([{ code: 1012, reason: 'Wiped' }]));
-    expect((await postToB(lane, b.clientId, BODY, await signedFor(listener.secret, BODY))).status).toBe(503);
+    expect((await postToB(lane, hookUrl(lane, b), BODY, await signedFor(listener.secret, BODY))).status).toBe(503);
   });
 
 });

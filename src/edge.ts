@@ -1,7 +1,7 @@
 // The Worker's edge. It refuses any other origin before an object wakes, checks A's tokens, and
 // routes only what its table lists, by path and method, to the one instance it names. A path it
 // does not list is 404, and a method it does not list for a path it does is 405.
-import { mcpEndpoint, authorizationServerMetadata, protectedResourceMetadata, resourceMetadataUrl } from './auth/metadata';
+import { authorizationServerMetadata, clientMetadataDocument, clientMetadataUrl, mcpEndpoint, protectedResourceMetadata, resourceMetadataUrl } from './auth/metadata';
 import { verifyToken } from './auth/signing';
 import { readCapped } from './read-capped';
 import {
@@ -35,10 +35,17 @@ const SERVER_ROUTES: readonly Route[] = [
   { path: /^\/page$/, methods: 'websocket' },
 ];
 
+// An instance a client names for its socket on B, as `i_Kp3…`, and an account's `sub`, as
+// `u_7Hq2…`, both URL-safe as they are.
+const NAME = '[A-Za-z0-9_-]{1,64}';
+/** An instance a client may name for its socket on B, which A issues tokens for. */
+export const INSTANCE = new RegExp(`^${NAME}$`);
+
 /** Every route the edge lets reach B. A delivery's signature is B's to check, not the edge's. */
 const GATEWAY_ROUTES: readonly Route[] = [
-  { path: /^\/hooks\/[^/]+$/, methods: ['POST'] },
-  { path: /^\/ws\/[^/]+$/, methods: 'websocket' },
+  // A client's hook, as `/hooks/<sub>/<instance>`.
+  { path: new RegExp(`^/hooks/${NAME}/${NAME}$`), methods: ['POST'] },
+  { path: new RegExp(`^/ws/${NAME}$`), methods: 'websocket' },
   { path: /^\/page$/, methods: 'websocket' },
 ];
 
@@ -51,7 +58,6 @@ const AUTHORIZATION_BODY_CAP = 16 * 1024;
 
 /** The authorization server's routes, which the Worker hands to A by hand, and their methods. */
 const AUTHORIZATION_ROUTES: ReadonlyMap<string, string> = new Map([
-  ['/register', 'POST'],
   ['/authorize', 'GET'],
   ['/token', 'POST'],
 ]);
@@ -102,8 +108,9 @@ function originGuard(request: Request, cors: CorsOptions): Response | undefined 
   return earlyResponse;
 }
 
-// The metadata a client discovers the authorization server by, served without waking A, and
-// the authorization server's own endpoints, which A answers.
+// The metadata a client discovers the authorization server by and the client ID metadata
+// document the Worker's own clients name themselves by, served without waking A, and the
+// authorization server's own endpoints, which A answers.
 async function authorizationRoute(request: Request, env: Env): Promise<Response | undefined> {
   const { pathname } = new URL(request.url);
   const resourceMetadataPaths = ['/.well-known/oauth-protected-resource', new URL(resourceMetadataUrl(env.ORIGIN, env.SERVER_INSTANCE)).pathname];
@@ -112,6 +119,9 @@ async function authorizationRoute(request: Request, env: Env): Promise<Response 
   }
   if (pathname === '/.well-known/oauth-authorization-server') {
     return metadataGuard(request) ?? Response.json(authorizationServerMetadata(env.ORIGIN));
+  }
+  if (pathname === new URL(clientMetadataUrl(env.ORIGIN)).pathname) {
+    return metadataGuard(request) ?? Response.json(clientMetadataDocument(env.ORIGIN));
   }
   if (pathname.startsWith('/.well-known/')) return notFound();
   const method = AUTHORIZATION_ROUTES.get(pathname);
@@ -156,23 +166,20 @@ async function requestGuard(request: Request, instance: string, env: Env): Promi
   return withClaims(request, verified.claims);
 }
 
-// A client's socket on B needs a token whose audience is that socket's own URL and whose subject
-// is the client the path names. A browser cannot set Authorization on an upgrade, and a query
+// A client's socket on B needs a token whose audience is that socket's own URL, and B files the
+// socket under the token's subject. A browser cannot set Authorization on an upgrade, and a query
 // string would reach logs, so the token rides as a subprotocol entry beside SUBPROTOCOL.
 async function socketGuard(request: Request, instance: string, env: Env): Promise<Response | Request | undefined> {
   const refused = routeGuard(request, instance, env.GATEWAY_INSTANCE, true, '/gateway', GATEWAY_ROUTES);
   if (refused) return refused;
   const { pathname } = new URL(request.url);
-  const client = /^\/gateway\/[^/]+\/ws\/([^/]+)$/.exec(pathname)?.[1];
-  if (!client) return undefined;
+  if (!/^\/gateway\/[^/]+\/ws\/[^/]+$/.test(pathname)) return undefined;
   const protocols = (request.headers.get('Sec-WebSocket-Protocol') ?? '').split(',').map((entry) => entry.trim());
   const token = protocols.find((entry) => entry.startsWith(TOKEN_SUBPROTOCOL))?.slice(TOKEN_SUBPROTOCOL.length);
   if (!token || !protocols.includes(SUBPROTOCOL)) return new Response('Unauthorized: a token is required', { status: 401 });
   const audience = `${env.ORIGIN}${pathname}`;
   const verified = await verifyToken(env.TOKEN_SIGNING_KEY, token, audience, Math.floor(Date.now() / 1000));
   if ('error' in verified) return new Response(`Unauthorized: ${verified.error}`, { status: 401 });
-  // A client id is URL-safe, so the path names it as it is, and an encoded one names no client.
-  if (verified.claims.sub !== client) return new Response('Unauthorized: the token is for another client', { status: 401 });
   return withClaims(request, verified.claims);
 }
 

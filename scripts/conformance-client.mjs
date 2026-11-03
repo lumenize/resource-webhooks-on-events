@@ -17,6 +17,8 @@ const client = createMcpClient({
   oauth: new OAuthSession({
     redirectUri: 'http://localhost:3000/callback',
     clientName: 'resource-webhooks-conformance-client',
+    // The suite's own document URL, which auth/basic-cimd compares the client id with.
+    clientMetadataUrl: 'https://conformance-test.local/client-metadata.json',
     ...(context.client_id ? { client: { clientId: context.client_id, clientSecret: context.client_secret } } : {}),
   }),
 });

@@ -1,8 +1,9 @@
-// The prototype's OAuth 2.1 authorization server, scaffolding that verifies no identity: anyone
-// may register and is approved at once, but each registration is a principal of its own. It
-// keeps no registrations. A client id is a signed value carrying A's epoch and a hash of its one
-// redirect URI, its secret derives from it, and a code is signed and short-lived. A writes only
-// a count of registrations per epoch and the codes already redeemed.
+// The prototype's OAuth 2.1 authorization server, scaffolding that verifies no identity. A client
+// names itself by the URL of its client ID metadata document, and is public, authenticated by
+// PKCE alone. The subject is an anonymous account per browser: a browser's first sign-in creates
+// one, signed into a cookie, and every later sign-in from it is that account, with no click. A
+// code is signed and short-lived. A writes only a count of accounts per Wipe and the codes
+// already redeemed.
 import { base64url, fromBase64url, mac, randomToken, sha256, signToken, verifyMac, type TokenClaims } from './signing';
 
 export interface AuthorizationServerOptions {
@@ -10,23 +11,30 @@ export interface AuthorizationServerOptions {
   secret: string;
   /** The Worker's origin, the issuer, as `https://….workers.dev`. */
   origin: string;
-  /** A's Wipe count now, so a Wipe ends every client id issued before it, and A refuses every earlier token. */
+  /** A's Wipe count now, so a Wipe ends every account cookie and code issued before it, and A refuses every earlier token. */
   epoch: () => number;
-  /** The resources a client may get a token for, as A's MCP endpoint and its own socket on B. */
-  resourcesFor: (clientId: string) => readonly string[];
-  /** How many clients may register in one epoch. */
+  /** Whether a client may get a token for `resource`, as A's MCP endpoint or a socket on B. */
+  resourceAllowed: (resource: string) => boolean;
+  /** The client ID metadata document at `url`, parsed, or `undefined` if it could not be had. */
+  clientDocument: (url: string) => Promise<unknown>;
+  /** How many accounts may be created between Wipes. */
   registrationCap: number;
 }
 
 export const TOKEN_LIFETIME_SECONDS = 3600;
 const CODE_LIFETIME_SECONDS = 60;
 const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//;
+/** The cookie that names a browser's account, as `<wipes>.<sub>.<mac>`. */
+const ACCOUNT_COOKIE = 'rw_account';
 
 interface CodeClaims {
   cid: string;
   ru: string;
   res: string;
   cc: string;
+  sub: string;
+  /** The Wipe count when the code was issued. */
+  ep: number;
   exp: number;
   jti: string;
 }
@@ -43,76 +51,23 @@ export class AuthorizationServer {
     this.#sql = options.sql;
     this.#options = options;
     options.sql.exec(`
-      CREATE TABLE IF NOT EXISTS Registrations (epoch INTEGER PRIMARY KEY, count INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS Accounts (wipes INTEGER PRIMARY KEY, count INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS RedeemedCodes (id TEXT PRIMARY KEY, expiresAt TEXT NOT NULL) WITHOUT ROWID;
     `);
   }
 
-  /** RFC 7591 registration of a confidential client with one redirect URI. */
-  async register(request: Request): Promise<Response> {
-    let metadata: { redirect_uris?: unknown; token_endpoint_auth_method?: unknown; client_name?: unknown };
-    try {
-      metadata = (await request.json()) as typeof metadata;
-    } catch {
-      return oauthError(400, 'invalid_client_metadata', 'The body is not JSON');
-    }
-    if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
-      return oauthError(400, 'invalid_client_metadata', 'The body is not a JSON object');
-    }
-    const uris = metadata.redirect_uris;
-    if (!Array.isArray(uris) || uris.length !== 1 || typeof uris[0] !== 'string') {
-      return oauthError(400, 'invalid_redirect_uri', 'Register exactly one redirect URI');
-    }
-    const redirectUri = uris[0];
-    let parsed: URL;
-    try {
-      parsed = new URL(redirectUri);
-    } catch {
-      return oauthError(400, 'invalid_redirect_uri', 'The redirect URI is not a URL');
-    }
-    // RFC 6749 § 3.1.2: a redirect URI has no fragment.
-    if (parsed.hash || redirectUri.includes('#')) return oauthError(400, 'invalid_redirect_uri', 'A redirect URI has no fragment');
-    if (!redirectUri.startsWith(`${this.#options.origin}/`) && !LOOPBACK.test(redirectUri)) {
-      return oauthError(400, 'invalid_redirect_uri', "A redirect URI must be on this server's origin or loopback");
-    }
-    const method = metadata.token_endpoint_auth_method ?? 'client_secret_post';
-    if (method !== 'client_secret_post') {
-      return oauthError(400, 'invalid_client_metadata', 'The only token endpoint auth method is client_secret_post');
-    }
-    const epoch = this.#options.epoch();
-    const count = this.#sql.exec<{ count: number }>('SELECT count FROM Registrations WHERE epoch = ?', epoch).toArray()[0]?.count ?? 0;
-    if (count >= this.#options.registrationCap) {
-      return oauthError(429, 'temporarily_unavailable', 'Too many clients have registered since the last Wipe');
-    }
-    this.#sql.exec('INSERT INTO Registrations (epoch, count) VALUES (?, 1) ON CONFLICT (epoch) DO UPDATE SET count = count + 1', epoch);
-
-    const unsigned = `${epoch}.${(await sha256(redirectUri)).slice(0, 22)}.${randomToken(12)}`;
-    const clientId = `${unsigned}.${await mac(this.#options.secret, 'client-id', unsigned)}`;
-    return Response.json(
-      {
-        client_id: clientId,
-        client_secret: await this.#clientSecret(clientId),
-        client_id_issued_at: Math.floor(Date.now() / 1000),
-        client_secret_expires_at: 0,
-        redirect_uris: [redirectUri],
-        token_endpoint_auth_method: 'client_secret_post',
-        grant_types: ['authorization_code'],
-        response_types: ['code'],
-        ...(typeof metadata.client_name === 'string' ? { client_name: metadata.client_name } : {}),
-      },
-      { status: 201, headers: { 'Cache-Control': 'no-store' } },
-    );
-  }
-
   /** The authorization endpoint, which approves at once and redirects with a code. */
-  async authorize(url: URL): Promise<Response> {
+  async authorize(url: URL, request: Request): Promise<Response> {
     const params = url.searchParams;
     const clientId = params.get('client_id') ?? '';
     const redirectUri = params.get('redirect_uri') ?? '';
     // Before the redirect URI is known good, an error is shown here and never redirected.
-    if (!(await this.#validClientId(clientId))) return oauthError(400, 'invalid_client', 'Unknown client');
-    if (!(await this.#redirectUriMatches(clientId, redirectUri))) {
-      return oauthError(400, 'invalid_request', 'The redirect URI is not the one this client registered');
+    if (!isDocumentUrl(clientId)) return oauthError(400, 'invalid_client', 'A client id is the https URL of its metadata document');
+    const document = await this.#options.clientDocument(clientId);
+    const refusal = this.#documentRefusal(clientId, document);
+    if (refusal) return oauthError(400, 'invalid_client', refusal);
+    if (!(document as { redirect_uris: string[] }).redirect_uris.includes(redirectUri)) {
+      return oauthError(400, 'invalid_request', "The redirect URI is not among the client's metadata document's");
     }
     const back = new URL(redirectUri);
     const state = params.get('state');
@@ -124,23 +79,35 @@ export class AuthorizationServer {
       return fail('invalid_request', 'PKCE with code_challenge_method S256 is required');
     }
     const resource = params.get('resource') ?? '';
-    if (!this.#options.resourcesFor(clientId).includes(resource)) {
-      return fail('invalid_target', "The resource is neither A's MCP endpoint nor this client's own socket on B");
+    if (!this.#options.resourceAllowed(resource)) {
+      return fail('invalid_target', "The resource is neither A's MCP endpoint nor a socket on B");
+    }
+    const wipes = this.#options.epoch();
+    let sub = await this.#accountOf(request, wipes);
+    let cookie: string | undefined;
+    if (!sub) {
+      if (!this.#createAccount(wipes)) return fail('temporarily_unavailable', 'Too many accounts have been created since the last Wipe');
+      sub = `u_${randomToken(12)}`;
+      cookie = await this.#accountCookie(wipes, sub);
     }
     const claims: CodeClaims = {
       cid: clientId,
       ru: redirectUri,
       res: resource,
       cc: challenge,
+      sub,
+      ep: wipes,
       exp: Math.floor(Date.now() / 1000) + CODE_LIFETIME_SECONDS,
       jti: randomToken(12),
     };
     const payload = base64url(new TextEncoder().encode(JSON.stringify(claims)));
     const code = `${payload}.${await mac(this.#options.secret, 'code', payload)}`;
-    return redirect(back, { code, state, iss: this.#options.origin });
+    const response = redirect(back, { code, state, iss: this.#options.origin });
+    if (cookie) response.headers.set('Set-Cookie', cookie);
+    return response;
   }
 
-  /** The token endpoint, for the authorization code grant with PKCE and `client_secret_post`. */
+  /** The token endpoint, for the authorization code grant with PKCE, from a public client. */
   async token(request: Request): Promise<Response> {
     let form: URLSearchParams;
     try {
@@ -152,13 +119,9 @@ export class AuthorizationServer {
       return oauthError(400, 'unsupported_grant_type', 'Only the authorization_code grant is supported');
     }
     const clientId = form.get('client_id') ?? '';
-    const clientSecret = form.get('client_secret') ?? '';
-    const secretValid = (await this.#validClientId(clientId)) && (await verifyMac(this.#options.secret, 'client-secret', clientId, clientSecret));
-    // 400, which RFC 6749 § 5.2 allows for a client that authenticates in the body, as here.
-    if (!secretValid) return oauthError(400, 'invalid_client', 'The client id and secret do not verify');
-
     const claims = await this.#codeClaims(form.get('code') ?? '');
     if (!claims) return oauthError(400, 'invalid_grant', 'The code is not one this server issued, or has expired');
+    if (claims.ep !== this.#options.epoch()) return oauthError(400, 'invalid_grant', 'The code was issued before the last Wipe');
     if (claims.cid !== clientId) return oauthError(400, 'invalid_grant', 'The code was issued to another client');
     if (claims.ru !== form.get('redirect_uri')) return oauthError(400, 'invalid_grant', 'The redirect URI differs from the authorization request');
     const resource = form.get('resource') ?? claims.res;
@@ -169,11 +132,11 @@ export class AuthorizationServer {
     const now = Math.floor(Date.now() / 1000);
     const token: TokenClaims = {
       iss: this.#options.origin,
-      sub: clientId,
+      sub: claims.sub,
       aud: resource,
       iat: now,
       exp: now + TOKEN_LIFETIME_SECONDS,
-      epoch: this.#options.epoch(),
+      epoch: claims.ep,
     };
     return Response.json(
       { access_token: await signToken(this.#options.secret, token), token_type: 'Bearer', expires_in: TOKEN_LIFETIME_SECONDS },
@@ -181,24 +144,53 @@ export class AuthorizationServer {
     );
   }
 
-  /** Forgets the registration counts and redeemed codes, as a Wipe does. The epoch voids the rest. */
+  /** Forgets the redeemed codes, as a Wipe does. The Wipe count voids every cookie, code and token. */
   clear(): void {
-    this.#sql.exec('DELETE FROM Registrations');
     this.#sql.exec('DELETE FROM RedeemedCodes');
   }
 
-  async #clientSecret(clientId: string): Promise<string> {
-    return mac(this.#options.secret, 'client-secret', clientId);
+  // Why A refuses the document, or `undefined` if it is one A takes: JSON holding `client_id`,
+  // `client_name` and `redirect_uris`, naming its own URL, and sending codes only to this origin
+  // or loopback, so a code never goes to another site.
+  #documentRefusal(clientId: string, document: unknown): string | undefined {
+    if (typeof document !== 'object' || document === null || Array.isArray(document)) return 'The client ID metadata document could not be fetched as a JSON object';
+    const { client_id: named, client_name: name, redirect_uris: uris } = document as Record<string, unknown>;
+    if (named !== clientId) return 'The client ID metadata document names another client_id';
+    if (typeof name !== 'string') return 'The client ID metadata document has no client_name';
+    if (!Array.isArray(uris) || uris.length === 0 || !uris.every((uri) => typeof uri === 'string')) {
+      return 'The client ID metadata document has no redirect_uris';
+    }
+    if (!uris.every((uri) => this.#redirectUriAllowed(uri))) return "A redirect URI must be on this server's origin or loopback, with no fragment";
+    return undefined;
   }
 
-  async #validClientId(clientId: string): Promise<boolean> {
-    const parts = clientId.split('.');
-    if (parts.length !== 4 || Number(parts[0]) !== this.#options.epoch()) return false;
-    return verifyMac(this.#options.secret, 'client-id', parts.slice(0, 3).join('.'), parts[3]);
+  #redirectUriAllowed(uri: string): boolean {
+    // RFC 6749 § 3.1.2: a redirect URI has no fragment.
+    if (uri.includes('#') || !URL.canParse(uri)) return false;
+    return uri.startsWith(`${this.#options.origin}/`) || LOOPBACK.test(uri);
   }
 
-  async #redirectUriMatches(clientId: string, redirectUri: string): Promise<boolean> {
-    return clientId.split('.')[1] === (await sha256(redirectUri)).slice(0, 22);
+  // The account the browser's cookie names, if it verifies and is from since the last Wipe.
+  async #accountOf(request: Request, wipes: number): Promise<string | undefined> {
+    const value = cookieValue(request.headers.get('Cookie'), ACCOUNT_COOKIE);
+    const [count, sub, signature, ...rest] = value?.split('.') ?? [];
+    if (rest.length > 0 || !sub || !signature || Number(count) !== wipes) return undefined;
+    return (await verifyMac(this.#options.secret, 'account', `${count}.${sub}`, signature)) ? sub : undefined;
+  }
+
+  // Counts one more account under this Wipe, unless the cap is reached.
+  #createAccount(wipes: number): boolean {
+    const count = this.#sql.exec<{ count: number }>('SELECT count FROM Accounts WHERE wipes = ?', wipes).toArray()[0]?.count ?? 0;
+    if (count >= this.#options.registrationCap) return false;
+    this.#sql.exec('INSERT INTO Accounts (wipes, count) VALUES (?, 1) ON CONFLICT (wipes) DO UPDATE SET count = count + 1', wipes);
+    return true;
+  }
+
+  // Sent only to the authorization endpoint, never readable by a page, and never on a request
+  // another site starts, so a sign-in another site frames or links to makes a new account.
+  async #accountCookie(wipes: number, sub: string): Promise<string> {
+    const value = `${wipes}.${sub}`;
+    return `${ACCOUNT_COOKIE}=${value}.${await mac(this.#options.secret, 'account', value)}; Path=/authorize; HttpOnly; Secure; SameSite=Strict`;
   }
 
   async #codeClaims(code: string): Promise<CodeClaims | undefined> {
@@ -218,6 +210,21 @@ export class AuthorizationServer {
     this.#sql.exec('INSERT INTO RedeemedCodes (id, expiresAt) VALUES (?, ?)', claims.jti, new Date(claims.exp * 1000).toISOString());
     return true;
   }
+}
+
+/** Whether `clientId` can be a client ID metadata document's URL: `https`, with a path, and no fragment or credentials. */
+export function isDocumentUrl(clientId: string): boolean {
+  if (!URL.canParse(clientId)) return false;
+  const url = new URL(clientId);
+  return url.protocol === 'https:' && url.pathname.length > 1 && !clientId.includes('#') && !url.username && !url.password;
+}
+
+function cookieValue(header: string | null, name: string): string | undefined {
+  for (const part of (header ?? '').split(';')) {
+    const [key, ...value] = part.trim().split('=');
+    if (key === name) return value.join('=');
+  }
+  return undefined;
 }
 
 function redirect(back: URL, params: Record<string, string | null>): Response {

@@ -1,6 +1,8 @@
-// B, the gateway: a webhook receiver for each of its clients, and each client's WebSocket. It
-// keeps a client's secret in the socket's attachment and stores nothing. The edge has checked
-// the token on a client's upgrade, and passes its claims in CLAIMS_HEADER.
+// B, the gateway: a webhook receiver for each of its clients, and each client's WebSocket. A
+// client is a subject's instance, as `u_7Hq2…/i_Kp3…`, the subject from the token and the
+// instance from the socket's path, so another subject's token cannot take a socket over. B keeps
+// a client's secret in the socket's attachment and stores nothing. The edge has checked the
+// token on a client's upgrade, and passes its claims in CLAIMS_HEADER.
 import { DurableObject } from 'cloudflare:workers';
 import { acceptPage, authorized, PAGE_TAG, report, type Control } from './back-channel';
 import { CLAIMS_HEADER } from './edge';
@@ -16,6 +18,7 @@ export const TOKEN_EXPIRED = 4401;
 export const SUPERSEDED = 4000;
 
 interface Attachment {
+  /** The subject and the instance, as `u_7Hq2…/i_Kp3…`, which the client's hook path ends in. */
   client: string;
   /** The token's expiry, in seconds since the epoch. */
   exp: number;
@@ -51,7 +54,7 @@ export class Gateway extends DurableObject<Env> {
     }
     const socket = /^\/ws\/([^/]+)$/.exec(path);
     if (socket) return await this.#acceptClient(socket[1], request);
-    const hook = /^\/hooks\/([^/]+)$/.exec(path);
+    const hook = /^\/hooks\/([^/]+\/[^/]+)$/.exec(path);
     if (hook && request.method === 'POST') {
       const bytes = await readCapped(request.body);
       if (!bytes) return new Response('Content Too Large', { status: 413 });
@@ -99,16 +102,18 @@ export class Gateway extends DurableObject<Env> {
     await this.#scheduleExpiry();
   }
 
-  async #acceptClient(client: string, request: Request): Promise<Response> {
-    // The edge checked the token's signature, expiry and audience, and that it was issued to the
-    // client the path names.
-    const claims = JSON.parse(request.headers.get(CLAIMS_HEADER) ?? 'null') as { exp: number } | null;
+  async #acceptClient(instance: string, request: Request): Promise<Response> {
+    // The edge checked the token's signature, expiry and audience, the socket's own URL.
+    const claims = JSON.parse(request.headers.get(CLAIMS_HEADER) ?? 'null') as { sub: string; exp: number } | null;
     if (!claims) return new Response('Unauthorized', { status: 401 });
+    const client = `${claims.sub}/${instance}`;
     const [browserSide, server] = Object.values(new WebSocketPair());
     // A client that reconnects replaces its older sockets, as Lumenize's ClientGateway does.
     for (const older of this.ctx.getWebSockets(`client:${client}`)) older.close(SUPERSEDED, 'Superseded by a newer connection');
     this.ctx.acceptWebSocket(server, [`client:${client}`]);
     server.serializeAttachment({ client, exp: claims.exp, connectedAt: new Date().toISOString() } satisfies Attachment);
+    // The hook URL the client subscribes with, the same across its reconnects.
+    server.send(JSON.stringify({ type: 'hook', hookUrl: `${this.env.ORIGIN}/gateway/${this.ctx.id.name!}/hooks/${client}` }));
     await this.#scheduleExpiry();
     report(this.ctx, 'B', { kind: 'connected', client });
     this.#reportHoldings();

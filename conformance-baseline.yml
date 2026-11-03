@@ -28,9 +28,6 @@ server:
 client:
   # The client speaks one protocol version, so it has no other to retry with.
   - request-metadata:sep-2575-client-retry-supported-version
-  # It registers by Dynamic Client Registration, as A's authorization server needs, and hosts
-  # no client ID metadata document.
-  - auth/basic-cimd:cimd-client-id-used
   # It sends no inputResponses, since A asks a client for no input.
   - sep-2322-client-request-state:sep-2322-client-jsonrpc-id-different
   - sep-2322-client-request-state:sep-2322-client-no-state-omitted

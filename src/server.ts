@@ -2,16 +2,20 @@
 // channel reports what it does, and takes the operator's controls.
 import { DurableObject } from 'cloudflare:workers';
 import { AuthorizationServer } from './auth/authorization-server';
-import { mcpEndpoint, resourceMetadataUrl } from './auth/metadata';
+import { clientMetadataDocument, clientMetadataUrl, mcpEndpoint, resourceMetadataUrl } from './auth/metadata';
 import { acceptPage, authorized, PAGE_TAG, report, type Control } from './back-channel';
-import { CLAIMS_HEADER } from './edge';
+import { CLAIMS_HEADER, INSTANCE } from './edge';
 import { serveMcp } from './mcp-http';
+import { readCapped } from './read-capped';
 import { ServerRole, type ServerExtras } from './server-role/server-role';
 
 interface Claims {
   sub: string;
   epoch: number;
 }
+
+/** The largest client ID metadata document A reads. */
+const MAX_DOCUMENT_BYTES = 16 * 1024;
 
 export class Server extends DurableObject<Env> {
   /** What a subclass adds to A's tools and resources, as the conformance build's fixtures. */
@@ -27,12 +31,16 @@ export class Server extends DurableObject<Env> {
     const name = ctx.id.name!;
     this.#base = `/server/${name}`;
     this.#role = new ServerRole({ extras: (new.target as typeof Server).extras });
+    const sockets = `${env.ORIGIN}/gateway/${env.GATEWAY_INSTANCE}/ws/`;
     this.#authorization = new AuthorizationServer({
       sql: ctx.storage.sql,
       secret: env.TOKEN_SIGNING_KEY,
       origin: env.ORIGIN,
       epoch: () => this.#wipes(),
-      resourcesFor: (clientId) => [mcpEndpoint(env.ORIGIN, name), `${env.ORIGIN}/gateway/${env.GATEWAY_INSTANCE}/ws/${clientId}`],
+      // A's MCP endpoint, or any instance's socket on B, which B files under the token's subject.
+      resourceAllowed: (resource) =>
+        resource === mcpEndpoint(env.ORIGIN, name) || (resource.startsWith(sockets) && INSTANCE.test(resource.slice(sockets.length))),
+      clientDocument: (url) => this.#clientDocument(url),
       registrationCap: Number(env.REGISTRATION_CAP),
     });
   }
@@ -59,10 +67,8 @@ export class Server extends DurableObject<Env> {
 
   async #answer(request: Request, url: URL, path: string): Promise<Response> {
     switch (url.pathname) {
-      case '/register':
-        return this.#authorization.register(request);
       case '/authorize':
-        return this.#authorization.authorize(url);
+        return this.#authorization.authorize(url, request);
       case '/token':
         return this.#authorization.token(request);
     }
@@ -104,8 +110,37 @@ export class Server extends DurableObject<Env> {
     this.#reportHoldings();
   }
 
-  // How many Wipes A has had. A token carries the count it was issued under, so a Wipe refuses
-  // every earlier token, and the registration cap counts afresh after each one.
+  // The client ID metadata document at `url`. The Worker's own clients' document comes from the
+  // code that serves it, since under wrangler's harness a fetch of it would reach the production
+  // host. Any other is fetched as a delivery is sent: a redirect is never followed, so a 3xx is
+  // no document, and each outcome is reported.
+  async #clientDocument(url: string): Promise<unknown> {
+    if (url === clientMetadataUrl(this.env.ORIGIN)) return clientMetadataDocument(this.env.ORIGIN);
+    let response: Response;
+    try {
+      response = await fetch(url, { headers: { Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(Number(this.env.ATTEMPT_TIMEOUT_MS)) });
+    } catch (error) {
+      report(this.ctx, 'A', { kind: 'document', url, failure: (error as Error).name === 'TimeoutError' ? 'timeout' : 'connection_refused' });
+      return undefined;
+    }
+    const bytes = await readCapped(response.body, MAX_DOCUMENT_BYTES);
+    const text = bytes ? new TextDecoder().decode(bytes) : '';
+    // Cloudflare answers some fetches with a page of its own naming an error code, as 1016 when
+    // its resolver gives no address.
+    const errorCode = /^error code: (\d+)/.exec(text)?.[1];
+    let document: unknown;
+    try {
+      document = response.status === 200 && bytes ? JSON.parse(text) : undefined;
+    } catch {
+      document = undefined;
+    }
+    const failure = !bytes ? 'too_large' : response.status === 200 && document === undefined ? 'not_json' : undefined;
+    report(this.ctx, 'A', { kind: 'document', url, status: response.status, ...(errorCode ? { errorCode: Number(errorCode) } : {}), ...(failure ? { failure } : {}) });
+    return document;
+  }
+
+  // How many Wipes A has had. A token, a code and an account cookie carry the count they were
+  // issued under, so a Wipe refuses every earlier one, and the account cap counts afresh.
   #wipes(): number {
     return (this.ctx.storage.kv.get('wipes') as number | undefined) ?? 0;
   }

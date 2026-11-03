@@ -1,9 +1,10 @@
 // Each test's own A. Storage is shared within a test file, so a test gets an instance name no
 // other test uses, given to the Worker through the binding that names the instance it routes.
 // B is the file's one gateway, named by GATEWAY_INSTANCE, since A's object reads that name from
-// its own env, which a test cannot vary. Each test's clients are its own registrations, so their
+// its own env, which a test cannot vary. Each test's clients are accounts on its own A, so their
 // sockets on B never meet another test's.
 import { env } from 'cloudflare:workers';
+import { clientMetadataUrl } from '../../src/auth/metadata';
 import { createMcpClient, OAuthSession, type McpClient } from '../../src/client/mcp-client';
 import worker from '../../src/index';
 import { socketOf, type Tier } from '../client/parties';
@@ -50,7 +51,7 @@ export interface Lane extends Tier {
   fetch(path: string, init?: RequestInit): Promise<Response>;
   /** An MCP client of A's endpoint, `{root}/mcp`, signed in as this lane's own client. */
   client: McpClient;
-  /** The lane's OAuth session, registered with A's authorization server as its own client. */
+  /** The lane's OAuth session, a browser of its own signing in by the Worker's client document. */
   session: OAuthSession;
   /** A token for A's MCP endpoint, got through the real flow on first use. */
   token(): Promise<string>;
@@ -65,7 +66,7 @@ export function newLane(): Lane {
   const root = `${env.ORIGIN}/server/${name}`;
   const send = (input: RequestInfo | URL, init?: RequestInit) => callWorker(new Request(input, init), laneEnv);
   const endpoint = `${root}/mcp`;
-  const session = new OAuthSession({ redirectUri: `${env.ORIGIN}/callback`, clientName: `lane ${name}`, fetch: send });
+  const session = new OAuthSession({ redirectUri: `${env.ORIGIN}/callback`, clientMetadataUrl: clientMetadataUrl(env.ORIGIN), fetch: send });
   const token = () => session.tokenFor(endpoint);
   return {
     origin: env.ORIGIN,

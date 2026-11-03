@@ -23,7 +23,7 @@
     // The one instance under /server the edge routes to, A, and under /gateway, B.
     "SERVER_INSTANCE": "A",
     "GATEWAY_INSTANCE": "B",
-    // How many clients may register with A's authorization server between Wipes.
+    // How many accounts A's authorization server may create between Wipes, one per new browser.
     "REGISTRATION_CAP": "1000",
     // How long A keeps a superseded revision's contents, and a deletion, before a later write
     // prunes them (R21).
