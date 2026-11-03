@@ -42,6 +42,25 @@ describe("the deployed Worker", () => {
   });
 });
 
+/** Whether a config keeps a timeline's history longer than it grants between refreshes, as R21 says a server SHOULD. */
+function historyOutlastsRefresh(configText: string): boolean {
+  // JSONC: drop each line's comment before parsing.
+  const { vars } = JSON.parse(configText.replace(/^\s*\/\/.*$/gm, '')) as { vars: Record<string, string> };
+  return Number(vars.CUTOFF_WINDOW_MS) > Number(vars.SUBSCRIPTION_TTL_MS);
+}
+
+describe("the deployed Worker's settings", () => {
+  it("R21's SHOULD: keep each timeline's history longer than the time between refreshes", () => {
+    const text = readFileSync(join(ROOT, 'wrangler.jsonc'), 'utf-8');
+    const values = (config: string) => [/"CUTOFF_WINDOW_MS": "(\d+)"/, /"SUBSCRIPTION_TTL_MS": "(\d+)"/].map((pattern) => pattern.exec(config)![1]);
+    const [cutoff, ttl] = values(text);
+    const swapped = text.replace(`"CUTOFF_WINDOW_MS": "${cutoff}"`, `"CUTOFF_WINDOW_MS": "${ttl}"`).replace(`"SUBSCRIPTION_TTL_MS": "${ttl}"`, `"SUBSCRIPTION_TTL_MS": "${cutoff}"`);
+    expect(values(swapped)).toEqual([ttl, cutoff]);
+    expect(historyOutlastsRefresh(swapped)).toBe(false);
+    expect(historyOutlastsRefresh(text)).toBe(true);
+  });
+});
+
 // A role module takes parsed messages and its host's `sql`, so a Lumenize node can compose it.
 // It must not reach for the platform a Durable Object gives it.
 const PLATFORM = [

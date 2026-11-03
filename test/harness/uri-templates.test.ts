@@ -2,7 +2,7 @@
 // still while synchronous code runs. Every write matches its uri against the listed templates,
 // and a later phase matches templates a client names.
 import { describe, expect, it } from 'vitest';
-import { templateMatcher } from '../../src/server-role/uri-templates';
+import { templateCovers, templateMatcher } from '../../src/server-role/uri-templates';
 
 describe("a template's match", () => {
   it('takes time in proportion to the uri, however many expressions sit side by side', () => {
@@ -25,5 +25,29 @@ describe("a template's match", () => {
     const reserved = templateMatcher('tickets/{+rest}')!;
     expect([simple('tickets/ticket-3'), simple('tickets/ticket-3/x'), simple('tickets/')]).toEqual([true, false, false]);
     expect([reserved('tickets/ticket-3'), reserved('tickets/ticket-3/x')]).toEqual([true, true]);
+  });
+});
+
+describe("R24's check, that a listed template covers every uri a client's could match", () => {
+  it('answers the table in § A template the server does not list', () => {
+    const rows: [string, string, boolean][] = [
+      ['skill://{skill}/{+path}', 'skill://code-review/{+path}', true],
+      ['skill://{skill}/{+path}', 'skill://code-review/scripts/{+file}', true],
+      ['{type}/{id}', 'tickets/{id}', true],
+      ['tickets/{id}', 'tickets/{+rest}', false],
+    ];
+    expect(rows.map(([listed, client]) => [listed, client, templateCovers(listed, client)])).toEqual(rows);
+  });
+
+  it('never matches a stand-in with a listed literal spelled like one', () => {
+    expect(templateCovers('tickets/SEG', 'tickets/{id}')).toBe(false);
+    // A one-character literal is where a stand-in, one token, could slip through.
+    expect(templateCovers('tickets/x', 'tickets/{id}')).toBe(false);
+    expect(templateCovers('tickets/ANY', 'tickets/{+rest}')).toBe(false);
+    expect(templateCovers('tickets/SEG', 'tickets/SEG')).toBe(true);
+  });
+
+  it('refuses a template A cannot match, on either side', () => {
+    expect([templateCovers('tickets/{id', 'tickets/{id}'), templateCovers('tickets/{id}', 'tickets/{?id}')]).toEqual([false, false]);
   });
 });

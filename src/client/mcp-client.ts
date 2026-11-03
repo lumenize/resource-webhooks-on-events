@@ -57,6 +57,8 @@ const NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ['events/unsubscribe', ['name']],
   ['events/poll', ['name']],
   ['events/stream', ['name']],
+  ['resources/collection/read', ['uri', 'uriTemplate']],
+  ['resources/collection/catchup', ['uri', 'uriTemplate']],
 ]);
 
 const EVENTS = 'io.modelcontextprotocol/events';

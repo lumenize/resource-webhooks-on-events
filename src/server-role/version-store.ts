@@ -115,9 +115,52 @@ export class Timelines {
     return this.#sql.exec<{ latest: string }>('SELECT latest FROM Timelines WHERE name = ?', timeline).one().latest;
   }
 
+  /** The oldest moment the timeline answers a catch-up from (R21). */
+  oldest(timeline: string): string {
+    return this.#sql.exec<{ oldest: string }>('SELECT oldest FROM Timelines WHERE name = ?', timeline).one().oldest;
+  }
+
   /** The path's newest row, a tombstone included, if A keeps one. */
   current(path: string): Row | undefined {
     return this.#sql.exec<RowRecord>('SELECT * FROM Changes WHERE path = ? ORDER BY moment DESC LIMIT 1', path).toArray().map(rowOf)[0];
+  }
+
+  /** The path's newest row at or before `moment`, a tombstone included, if A keeps one. */
+  asOf(path: string, moment: string): Row | undefined {
+    return this.#sql.exec<RowRecord>('SELECT * FROM Changes WHERE path = ? AND moment <= ? ORDER BY moment DESC LIMIT 1', path, moment).toArray().map(rowOf)[0];
+  }
+
+  /** Each resource's newest row on the timeline, tombstones included, if it is later than `from`, in moment order. */
+  changedAfter(timeline: string, from: string): Row[] {
+    return this.#sql
+      .exec<RowRecord>(
+        `SELECT * FROM Changes AS c
+         WHERE timeline = ? AND moment > ? AND moment = (SELECT MAX(moment) FROM Changes WHERE path = c.path)
+         ORDER BY moment, path`,
+        timeline,
+        from,
+      )
+      .toArray()
+      .map(rowOf);
+  }
+
+  /**
+   * Each resource's newest row on the timeline, tombstones included, in path order after `after`
+   * and from `prefix` on, at most `limit`, so a read starts where its collection's paths do.
+   */
+  newestInPathOrder(timeline: string, after: string, prefix: string, limit: number): Row[] {
+    return this.#sql
+      .exec<RowRecord>(
+        `SELECT * FROM Changes AS c
+         WHERE timeline = ? AND path > ? AND path >= ? AND moment = (SELECT MAX(moment) FROM Changes WHERE path = c.path)
+         ORDER BY path LIMIT ?`,
+        timeline,
+        after,
+        prefix,
+        limit,
+      )
+      .toArray()
+      .map(rowOf);
   }
 
   /**
@@ -176,13 +219,13 @@ export class Timelines {
   }
 }
 
-/** One write in progress: the rows it has put, by path, and the moment it minted on each timeline. */
+/** One write in progress: the rows it has put, and the moment it minted on each timeline. */
 export class Write {
   readonly #sql: SqlStorage;
   readonly #timelineOf: (path: string) => string | undefined;
   readonly #prune: (now: Date) => void;
   readonly #moments = new Map<string, string>();
-  readonly #written = new Map<string, Written>();
+  readonly #written: Written[] = [];
   readonly #now = new Date();
 
   constructor(sql: SqlStorage, timelineOf: (path: string) => string | undefined, prune: (now: Date) => void) {
@@ -201,30 +244,21 @@ export class Write {
     return this.#add(path, null);
   }
 
-  /** The resources this write changed, in the order it first put each, with their rows now. */
-  written(): Written[] {
-    return [...this.#written.values()];
-  }
-
-  /** Prunes, as every write ends. */
+  /** Prunes, as every write ends, and answers the resources it changed, in the order it put them. */
   finish(): Written[] {
     this.#prune(this.#now);
-    return this.written();
+    return this.#written;
   }
 
   #add(path: string, contents: string | null): Written {
     const timeline = this.#timelineOf(path);
     if (!timeline) throw new RangeError(`No listed uri-specification covers ${path}`);
     const moment = this.#momentOn(timeline);
-    // A path put twice keeps the row from before this write as its previous one.
-    const earlier = this.#written.has(path)
-      ? this.#written.get(path)!.previous
-      : this.#sql.exec<RowRecord>('SELECT * FROM Changes WHERE path = ? ORDER BY moment DESC LIMIT 1', path).toArray().map(rowOf)[0];
+    const earlier = this.#sql.exec<RowRecord>('SELECT * FROM Changes WHERE path = ? ORDER BY moment DESC LIMIT 1', path).toArray().map(rowOf)[0];
     const row: Row = { path, moment, deleted: contents === null, contents, writtenAt: this.#now.toISOString() };
-    // A second put of one path in one write replaces the first, at the same moment.
+    // No write puts one path twice, and the primary key refuses one that tried.
     this.#sql.exec(
-      `INSERT INTO Changes (path, moment, timeline, contents, deleted, writtenAt) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (path, moment) DO UPDATE SET contents = excluded.contents, deleted = excluded.deleted`,
+      'INSERT INTO Changes (path, moment, timeline, contents, deleted, writtenAt) VALUES (?, ?, ?, ?, ?, ?)',
       path,
       moment,
       timeline,
@@ -233,7 +267,7 @@ export class Write {
       row.writtenAt,
     );
     const written: Written = earlier ? { row, previous: earlier } : { row };
-    this.#written.set(path, written);
+    this.#written.push(written);
     return written;
   }
 

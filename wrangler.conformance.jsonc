@@ -29,7 +29,9 @@
     "SUBSCRIPTION_CAP": "100",
     "VERIFICATION_BURST": "10",
     "HEARTBEAT_MS": "30000",
-    "PAGE_SIZE": "100"
+    "PAGE_SIZE": "100",
+    "SCAN_LIMIT": "1000",
+    "PAGE_BYTES": "262144"
   },
   "version_metadata": { "binding": "VERSION" },
   "dev": { "port": 8788, "ip": "localhost" }

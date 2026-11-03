@@ -4,6 +4,8 @@
 // transport has already read and checked, with the principal the edge verified, and from its host
 // `sql` and how to run a transaction, so a Lumenize node can compose it as A does here.
 import {
+  type CatchUpCollectionRequestParams,
+  type ReadCollectionRequestParams,
   NOT_SUPPORTED,
   PRECONDITION_FAILED,
   RESOURCE_OPERATIONS_EXTENSION,
@@ -38,6 +40,7 @@ import type {
   Tool,
 } from '../vendor/mcp-spec/2026-07-28/schema';
 import { INVALID_PARAMS, LATEST_PROTOCOL_VERSION, METHOD_NOT_FOUND } from '../vendor/mcp-spec/2026-07-28/schema';
+import { ResourceWebhooks, type CollectionLimits } from './resource-webhooks';
 import { requestErrors, resourceErrors } from './validation';
 import { Timelines, type Row, type TimelineMap, type Write, type Written } from './version-store';
 
@@ -77,6 +80,8 @@ export interface ServerRoleOptions {
   /** Which timeline each of A's listed uri-specifications names, one of LAYOUTS. */
   map: TimelineMap;
   cutoffWindowMs: number;
+  /** How far one page of a collection read goes. */
+  limits: CollectionLimits;
   extras?: ServerExtras;
 }
 
@@ -112,6 +117,7 @@ const UNCACHED = { ttlMs: 0, cacheScope: 'public' } as const;
 
 export class ServerRole {
   readonly store: Timelines;
+  readonly #webhooks: ResourceWebhooks;
   readonly #root: string;
   readonly #map: TimelineMap;
   readonly #transactionSync: <T>(fn: () => T) => T;
@@ -125,6 +131,7 @@ export class ServerRole {
     this.#transactionSync = options.transactionSync;
     this.#extras = options.extras ?? {};
     this.store = new Timelines(options.sql, { map: options.map, cutoffWindowMs: options.cutoffWindowMs });
+    this.#webhooks = new ResourceWebhooks({ store: this.store, root: options.root, map: options.map, limits: options.limits });
     const methods: [string, Method][] = [
       ['server/discover', () => this.#discover()],
       ['resources/list', (params) => this.#listResources(params)],
@@ -134,6 +141,8 @@ export class ServerRole {
       ['resources/create', (params) => this.#create(params as unknown as CreateResourceRequestParams)],
       ['resources/update', (params) => this.#update(params as unknown as UpdateResourceRequestParams)],
       ['resources/delete', (params) => this.#delete(params as unknown as DeleteResourceRequestParams)],
+      ['resources/collection/read', (params) => this.#webhooks.read(params as unknown as ReadCollectionRequestParams)],
+      ['resources/collection/catchup', (params) => this.#webhooks.catchUp(params as unknown as CatchUpCollectionRequestParams)],
     ];
     // A has no tools of its own, so it serves the two tool methods only for a host's.
     if (this.#tools().length > 0) {
@@ -216,7 +225,8 @@ export class ServerRole {
     return { resultType: 'complete', resource: this.#resource(current), revision: current.moment, ttlMs: 0, cacheScope: 'private' };
   }
 
-  // Create-if-absent. Its row comes first, so a cascade refused after it rolls it back too.
+  // Create-if-absent. Its row and its cascade run in one transaction, so a refused cascade leaves
+  // no row behind.
   #create({ uri, contents }: CreateResourceRequestParams): WriteResourceResult {
     const path = this.#ownPath(uri);
     if (utf8Length(uri) > MAX_URI_BYTES) throw new JsonRpcError(INVALID_PARAMS, `The uri is longer than ${MAX_URI_BYTES} bytes`, { uri });
@@ -275,7 +285,7 @@ export class ServerRole {
     if (now.status === 'closed' && was?.status !== 'closed') {
       const note = this.#live(`notes/${id}`);
       const parsed = note && (JSON.parse(note.contents!) as Note);
-      if (parsed && parsed.done !== true) write.put(note.path, JSON.stringify({ ...parsed, done: true }));
+      if (parsed && parsed.done !== true) this.#putBounded(write, note.path, JSON.stringify({ ...parsed, done: true }));
     }
     if (now.duplicateOf !== undefined && now.duplicateOf !== was?.duplicateOf) {
       if (now.duplicateOf === id) throw new JsonRpcError(INVALID_PARAMS, 'A ticket cannot duplicate itself', { uri: this.#uri(path) });
@@ -283,8 +293,17 @@ export class ServerRole {
       if (!other) throw notFound(this.#uri(`tickets/${now.duplicateOf}`));
       const parsed = JSON.parse(other.contents!) as Ticket;
       const duplicatedBy = parsed.duplicatedBy ?? [];
-      if (!duplicatedBy.includes(id)) write.put(other.path, JSON.stringify({ ...parsed, duplicatedBy: [...duplicatedBy, id] }));
+      if (!duplicatedBy.includes(id)) this.#putBounded(write, other.path, JSON.stringify({ ...parsed, duplicatedBy: [...duplicatedBy, id] }));
     }
+  }
+
+  // Contents a cascade writes, held to the bound a client's are, so no resource outgrows what a
+  // client could send back whole in an update.
+  #putBounded(write: Write, path: string, text: string): void {
+    if (utf8Length(text) > MAX_CONTENTS_BYTES) {
+      throw new JsonRpcError(INVALID_PARAMS, `The write would make a resource larger than ${MAX_CONTENTS_BYTES} bytes`, { uri: this.#uri(path) });
+    }
+    write.put(path, text);
   }
 
   // The contents a write sent, kept as sent (R17), once they are one JSON text entry for this uri

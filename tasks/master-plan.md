@@ -557,7 +557,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 **Goal.** Plain requests read a collection and catch up on it, with no subscription (R13, R21, R22, R24, D3, D12, D23).
 
-**What comes in.** The `lane-paged` vitest project, which Phase 1 left out while it had no test to run. `#listing` in `src/server-role/resource-webhooks.ts` becomes `resources/collection/read`, and `#catchUp` becomes `resources/collection/catchup`, as § *Current state* says. `src/mcp-http.ts` takes `Mcp-Name` for both from `uri` or `uriTemplate`. A named uriTemplate is at most 1 KiB, and a named uri at most 2 KiB. A read stops a page after `SCAN_LIMIT` rows scanned, or once its contents pass `PAGE_BYTES`, with a short page and a `nextCursor`, and a catch-up stops short the same way. A vitest project, `lane-limits`, sets both small.
+**What comes in.** The `lane-paged` vitest project, which Phase 1 left out while it had no test to run. `#listing` in `src/server-role/resource-webhooks.ts` becomes `resources/collection/read`, and `#catchUp` becomes `resources/collection/catchup`, as § *Current state* says. `src/mcp-http.ts` takes `Mcp-Name` for both from `uri` or `uriTemplate`. A named uriTemplate is at most 1 KiB, and a named uri at most 2 KiB. A read stops a page after `SCAN_LIMIT` rows scanned, or once its contents pass `PAGE_BYTES`, with a short page and a `nextCursor`, and Phase 5 stops a catch-up short the same way, with the tests it carries for it. A vitest project, `lane-limits`, sets both small.
 
 **Success criteria (capable of failing).**
 
@@ -781,11 +781,11 @@ Residuals to know of:
 - B's socket cap first counted after closing the socket it replaced, which stays listed until its client answers the close, so a reconnect at the cap was refused. Its test also dropped the client end of each socket it opened, which the runtime may close, so it passed or failed by timing. B now counts before it closes, and the test holds each socket open, as a client does.
 - Two mutations first showed as surviving. In one, the replacement text, `;`, wasn't unique, so `mutate.mjs` refused it, which the loop around it reported as a survivor. The loop now reports a refusal as one. The other was real: two guards on `duplicatedBy` overlapped, so no test reached either alone, and the duplicate test now does.
 
-**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red, on both layouts where the test runs on both:
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red, on both layouts where the test runs on both, except where a test's layouts differ, as the note test's do:
 
 - R1's test, for a check that refuses only one specification matching the other, which passes `{kind}/ticket-3`, and for skipping the check.
 - R2 and R3's, for moments with no padding, which also turns R5's red.
-- R4's two, for minting a moment per resource. The note test, for committing the note in a write of its own, and for leaving the note open. The duplicate test, for leaving `duplicatedBy` alone.
+- R4's two, for minting a moment per resource, which turns the note test red on the shared map alone, where the ticket and its note share a timeline. The note test, for committing the note in a write of its own, also on the shared map alone, and for leaving the note open, on both. The duplicate test, for leaving `duplicatedBy` alone.
 - R5's, for minting before an await and committing after it with no check.
 - The refused-write test, for running the write outside `transactionSync`.
 - R7's first test, for a deletion's entry with no `revision`, and for a read with no revision in `_meta`. R7's second, for dropping the `alreadyExists` check and either `ifMatch` check.
@@ -796,7 +796,68 @@ Residuals to know of:
 - The refusals test, for dropping the type check, the `contents.uri` check, or the type in `notSupported`'s check. The duplicate test, for a ticket duplicating itself, for adding a duplicate twice, and for looking up `duplicateOf` on every write.
 - For the Phase 2 fixes: B's cap test, for dropping the cap and for counting the instance a socket replaces. The cookie test, for dropping `Max-Age`. The report test, for reading the body outside the `try`. The client's single sign-in test, for starting a sign-in on every call.
 
+**The verifier's findings,** fixed in Phase 4's commit:
+
+- A cascade's writes skipped the 16 KiB bound, so enough long-named duplicates, or a note at the bound gaining `done`, could outgrow what a client can send back whole in an update. They are now held to the bound, and a write that would pass it is refused, in a test on each layout.
+- The duplicate test ran on the shared map alone, though nothing in it needs one layout, and now runs on both.
+- A write could put one path twice, though no write does, so that branch and its `ON CONFLICT` went, and the primary key refuses a write that tried.
+- Two comments claimed more than the code does. The create's credited its rows' order with the rollback, which the transaction gives. R5's test credited the input gate, where each write running synchronously, from its read of the latest moment to its commit, is what keeps them apart. The criterion's own wording names the input gate.
+
+Residuals the verifier named:
+
+- A uri the request schema refuses as malformed gets `-32602` with the schema's errors as `data`, not the strawman's `invalidUri`.
+- The prunes read every row on each write. Until a tombstone is dropped, the oldest moment stays at zero, so no row goes, and the read grows with every change.
+- `asOf` and `changedAfter`, which § *Current state* lists with the store's adaptation, came in with Phase 4, the first phase to read them.
+
+**For Larry, from the verifier.** R4 says one atomic step gives the resources it touches one moment, "so resources that can change together share a timeline". On the split layout, closing a ticket closes its note in one transaction at two moments, one on each timeline, as Phase 3's criterion and D10's "committing once per timeline" ask. D10's rejected alternative, though, says the split layout "can't … close a ticket and its note in one step". The build follows D10. Whether R4 needs a clause for a write that spans timelines is your call, and it is teed up when the build ends.
+
 **Close-out.** The suite is 292 tests in 17 files, all passing, and both conformance suites pass. Phase 2's verifier findings are fixed here. The R21 prunes are built and wait for Phase 4's tests.
+
+### Phase 4
+
+**For Larry.** Nothing needs a decision before Phase 5. These names are new in code, each yours to keep or rename:
+
+- The types in `src/extension-types.ts`, in the spec's style: `ReadCollectionRequest`, `ReadCollectionResult`, `CatchUpCollectionRequest`, `CatchUpCollectionResult`, `CollectionChange`, and `UriSpecification` for the pair of `uri` and `uriTemplate`.
+- `MAX_NAMED_URI_BYTES`, `MAX_NAMED_TEMPLATE_BYTES` and `NEXT_POLL_MS`, which is 30,000, as the proposal's examples answer.
+- `SCAN_LIMIT` and `PAGE_BYTES` take the names the phase gave them, with 1,000 rows and 256 KiB in `wrangler.jsonc`.
+
+What differs from the phase as written:
+
+- A catch-up always runs to the timeline's latest moment here. Stopping one short needs it to bring each resource as it stood where it stopped, which Phase 5 builds and tests, so the phase text now says the stop lands there.
+- A read starts its scan at the literal text its uri-specification begins with, as `tickets/` for `tickets/{id}`, so the rows `SCAN_LIMIT` counts are its timeline's from there on, not every row before them.
+
+Choices the phase made where the task file left one open:
+
+- A catch-up refuses a `from` that is not a moment, 12 digits, with `InvalidParams`, since a client's `"107"` sorts after every moment A mints and would read as caught up.
+- A read's cursor is the page's `nextFrom` and the last path scanned, base64url-encoded JSON. A refuses one that does not parse, or names a `nextFrom` past the timeline's latest, with `Invalid cursor`.
+- Every refusal's `data` names the uri or uriTemplate the request named, as the builder note on R10, R18 and R20 asks. `momentExpired` and `notFound` both carry it.
+- A catch-up's `contents` entry carries no `_meta` revision, since the entry's `revision` is it. A read's entries carry it, as `resources/read`'s do.
+
+Residuals to know of:
+
+- A read whose timeline is wiped between its pages runs on, and the catch-up after it gets `momentExpired`, as R21 sends a client to start over.
+
+**Retro.**
+
+- Every test of Phase 4's passed on its first run but one, which named `projects/project-1` as a uri nothing covers. On the shared map `{type}/{id}` covers it, so it needed three segments.
+- Two mutations survived at first, and both showed a test too weak to fail. The scan-limit test's tickets were small enough that `PAGE_BYTES` stopped each page at three tickets too, so it now pages over tombstones, which a page scans and never carries. The stand-in test used `SEG` as a listed literal, and no one stand-in token can match three characters, so it now adds a literal of one character.
+- A loop of requests built as an array of promises left the later ones unawaited while the first was checked, so vitest reported their refusals as unhandled. The loops now build each request when it is checked.
+- The mutation comparing `from` with the oldest moment by `<=` turns ten tests red, since every catch-up from a fresh timeline starts at its oldest moment, zero. The boundary is doing its job, so the mutation is not too broad.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red on both layouts:
+
+- R13's test, for dropping deletions, for keeping rows the uri-specification doesn't cover, for a read carrying tombstones, and for a read's scan that doesn't start at its prefix, which also turns the `nextFrom` test red.
+- R13's first sub-bullet, for answering a covered uri no resource holds with `notFound`.
+- R13's errors test, for answering an uncovered uri, preferring `uriTemplate` when both are named, dropping the `from` check, and dropping either bound. The header test, for leaving both methods out of `mcp-http.ts`'s table.
+- The `nextFrom` test, for a catch-up's `nextFrom` as its newest entry's revision.
+- R24's test, for keeping the folder rule, which also turns R13's errors test red, and for accepting every template. The harness's table test, for a `{name}` matching `ANY`, and its literal test, for a literal matching a stand-in.
+- R21's tests, for comparing with `<=`, and the window test for deleting the clock jump. The ticket-5 test, for the first flavor's prune.
+- The paging test, for an offset cursor, and the cursor test, for taking any cursor that parses.
+- The limits tests, for a read that stops only at `PAGE_SIZE`, for one with no scan limit, and for one with no byte limit, each turning its own test red.
+- R21's SHOULD, for a `CUTOFF_WINDOW_MS` shorter than `SUBSCRIPTION_TTL_MS` in `wrangler.jsonc`.
+- For Phase 3's fixes: the bound test, for an unbounded cascade, and the duplicate test's three mutations again, now on both layouts.
+
+**Close-out.** Phase 3's verifier findings are fixed here. The prunes Phase 3 built now have their tests. The suite is 325 tests in 20 files, all passing, and both conformance suites pass.
 
 ## Notes kept out of the proposal
 

@@ -6,7 +6,10 @@
 import type {
   BlobResourceContents,
   CacheableResult,
+  Cursor,
   JSONRPCRequest,
+  PaginatedResult,
+  RequestParams,
   Resource,
   ResourceRequestParams,
   Result,
@@ -95,4 +98,62 @@ export interface DeleteResourceRequest extends JSONRPCRequest {
 
 export interface DeleteResourceResult extends Result {
   changes: ChangeSetEntry[];
+}
+
+/** A uri-specification, as a collection read or a catch-up names it: exactly one of `uri` and `uriTemplate`. */
+export interface UriSpecification {
+  /**
+   * A uri, a collection of one.
+   * @format uri
+   */
+  uri?: string;
+  /** A uriTemplate the server lists, or one a template it lists covers (R24). */
+  uriTemplate?: string;
+}
+
+export interface ReadCollectionRequestParams extends RequestParams, UriSpecification {
+  /** The `nextCursor` of the read's previous page. */
+  cursor?: Cursor;
+}
+
+/** Reads every resource in a collection, a page at a time, and the moment to catch up from after (R22). */
+export interface ReadCollectionRequest extends JSONRPCRequest {
+  method: 'resources/collection/read';
+  params: ReadCollectionRequestParams;
+}
+
+export interface ReadCollectionResult extends PaginatedResult, CacheableResult {
+  /** Each resource in the collection, as `resources/read` returns it, with its revision in `_meta` (R7). */
+  contents: (TextResourceContents | BlobResourceContents)[];
+  /** The timeline's latest moment when the read began, the same on every page. */
+  nextFrom: string;
+}
+
+export interface CatchUpCollectionRequestParams extends RequestParams, UriSpecification {
+  /** The moment the client is caught up to. */
+  from: string;
+  /** The patch formats the client applies, by media type, in its order of preference (R19). */
+  patchMimeTypes?: string[];
+}
+
+/** Brings every change to a collection after `from`, up to `nextFrom`, and stores nothing (R13). */
+export interface CatchUpCollectionRequest extends JSONRPCRequest {
+  method: 'resources/collection/catchup';
+  params: CatchUpCollectionRequestParams;
+}
+
+/** One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with contents added (R19). */
+export interface CollectionChange extends ChangeSetEntry {
+  /** The resource as it stood at `nextFrom`, for any change but a deletion. */
+  contents?: TextResourceContents | BlobResourceContents;
+}
+
+export interface CatchUpCollectionResult extends Result {
+  changes: CollectionChange[];
+  /** Whether the catch-up stopped short of the timeline's latest moment (R14). */
+  hasMore: boolean;
+  /** The `from` of the client's next catch-up. */
+  nextFrom: string;
+  /** How long a client that polls waits before its next catch-up, in milliseconds (D12). */
+  nextPollMs: number;
 }

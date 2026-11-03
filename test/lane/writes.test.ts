@@ -1,65 +1,15 @@
 // The Filesystems strawman's four methods writing tickets and notes onto A's timelines (R1 to R5,
-// R7, R17, D10), on both layouts. A timeline's latest moment is read from A's storage, below the
-// public API, since no method reports it before Phase 4's collection read.
+// R7, R17, D10), on both layouts. Each timeline's latest and oldest moments are read from A's
+// storage, below the public API, since a write's result shows only the moments it minted.
 import { abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { McpError } from '../../src/client/mcp-client';
-import type { ChangeSetEntry, DeleteResourceResult, StatResourceResult, WriteResourceResult } from '../../src/extension-types';
-import type { Note, Ticket } from '../../src/resource-types';
+import type { ChangeSetEntry } from '../../src/extension-types';
+import type { Ticket } from '../../src/resource-types';
 import { LAYOUTS as MAPS, MAX_CONTENTS_BYTES, MAX_URI_BYTES } from '../../src/server-role/server-role';
 import { MOMENT_WIDTH, momentOf, Timelines, type TimelineMap } from '../../src/server-role/version-store';
 import { watch } from '../client/parties';
-import { LAYOUTS, newLane, type Lane } from './lane';
-
-const REVISION = 'io.modelcontextprotocol/resource-revision';
-
-function contentsFor(lane: Lane, path: string, value: Ticket | Note | string) {
-  return { uri: `${lane.root}/${path}`, mimeType: 'application/json', text: typeof value === 'string' ? value : JSON.stringify(value) };
-}
-
-function create(lane: Lane, path: string, value: Ticket | Note | string): Promise<WriteResourceResult> {
-  return lane.client.request('resources/create', { uri: `${lane.root}/${path}`, contents: contentsFor(lane, path, value) });
-}
-
-function update(lane: Lane, path: string, value: Ticket | Note | string, ifMatch: string): Promise<WriteResourceResult> {
-  return lane.client.request('resources/update', { uri: `${lane.root}/${path}`, contents: contentsFor(lane, path, value), ifMatch });
-}
-
-function remove(lane: Lane, path: string, ifMatch?: string): Promise<DeleteResourceResult> {
-  return lane.client.request('resources/delete', { uri: `${lane.root}/${path}`, ...(ifMatch === undefined ? {} : { ifMatch }) });
-}
-
-function stat(lane: Lane, path: string): Promise<StatResourceResult> {
-  return lane.client.request('resources/stat', { uri: `${lane.root}/${path}` });
-}
-
-async function read(lane: Lane, path: string): Promise<{ text: string; _meta: Record<string, unknown> }> {
-  const { contents } = await lane.client.request('resources/read', { uri: `${lane.root}/${path}` });
-  return (contents as { text: string; _meta: Record<string, unknown> }[])[0];
-}
-
-/** Each timeline's latest moment and the oldest it answers from, by name, from A's storage. */
-function timelines(lane: Lane): Promise<Record<string, { latest: string; oldest: string }>> {
-  return runInDurableObject(lane.stub, (_instance, state) =>
-    Object.fromEntries(
-      state.storage.sql
-        .exec<{ name: string; latest: string; oldest: string }>('SELECT name, latest, oldest FROM Timelines')
-        .toArray()
-        .map(({ name, latest, oldest }) => [name, { latest, oldest }]),
-    ),
-  );
-}
-
-/** The error a request was refused with, as its code and data. */
-async function refusal(request: Promise<unknown>): Promise<{ code: number; data: unknown }> {
-  const error = await request.then(
-    () => undefined,
-    (thrown: unknown) => thrown,
-  );
-  expect(error).toBeInstanceOf(McpError);
-  const { code, data } = error as McpError;
-  return { code, data };
-}
+import { LAYOUTS, newLane } from './lane';
+import { contentsFor, create, read, refusal, remove, REVISION, stat, timelines, update } from './resources';
 
 const TICKETS = (layout: string) => (layout === 'split' ? 'tickets' : 'work');
 const NOTES = (layout: string) => (layout === 'split' ? 'notes' : 'work');
@@ -115,8 +65,8 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
   });
 
   it('R5: twenty writes sent to one timeline at once get the twenty moments after the latest before them', async () => {
-    // A Durable Object's input gate keeps these from interleaving, so this guards a property the
-    // platform gives, until R6's several writers.
+    // Each write runs synchronously from its read of the latest moment to its commit, so these
+    // cannot interleave in one Durable Object. This guards that, until R6's several writers.
     const lane = newLane(layout);
     const before = BigInt((await timelines(lane))[NOTES(layout)].latest);
     const results = await Promise.all(Array.from({ length: 20 }, (_, i) => create(lane, `notes/note-${i}`, { title: `Note ${i}` })));
@@ -229,6 +179,35 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     }
     expect((await refusal(stat(lane, 'tickets/ticket-3'))).data).toMatchObject({ reason: 'notFound' });
   });
+  it('refuses a ticket that duplicates itself, and adds a duplicate once', async () => {
+    const lane = newLane(layout);
+    const opened = await create(lane, 'tickets/ticket-9', { title: 'Printer jams', status: 'open' });
+    await create(lane, 'tickets/ticket-8', { title: 'Printer jams, too', status: 'open' });
+    expect((await refusal(update(lane, 'tickets/ticket-9', { title: 'Printer jams', status: 'open', duplicateOf: 'ticket-9' }, opened.revision))).code).toBe(-32602);
+    let seven = (await create(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-9' })).revision;
+    // Pointed at ticket-8 and back, ticket-7 is in ticket-9's duplicatedBy once, since a change
+    // of duplicateOf only ever adds.
+    seven = (await update(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-8' }, seven)).revision;
+    seven = (await update(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-9' }, seven)).revision;
+    expect(JSON.parse((await read(lane, 'tickets/ticket-9')).text).duplicatedBy).toEqual(['ticket-7']);
+
+    // A write that leaves duplicateOf as it was looks for no ticket, so it goes through after
+    // ticket-9 is deleted, and changes ticket-7 alone.
+    await remove(lane, 'tickets/ticket-9');
+    const renamed = await update(lane, 'tickets/ticket-7', { title: 'Again, renamed', status: 'closed', duplicateOf: 'ticket-9' }, seven);
+    expect(renamed.changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-7`]);
+  });
+
+  it('refuses a write whose cascade would make a resource larger than 16 KiB', async () => {
+    const lane = newLane(layout);
+    // ticket-9 at the bound, so naming it as a duplicate would push it past.
+    const title = 'x'.repeat(MAX_CONTENTS_BYTES - JSON.stringify({ title: '', status: 'open' }).length);
+    await create(lane, 'tickets/ticket-9', { title, status: 'open' });
+    const seven = await create(lane, 'tickets/ticket-7', { title: 'Again', status: 'open' });
+    const refused = await refusal(update(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-9' }, seven.revision));
+    expect(refused).toEqual({ code: -32602, data: { uri: `${lane.root}/tickets/ticket-9` } });
+    expect((await stat(lane, 'tickets/ticket-7')).revision).toBe(seven.revision);
+  });
 });
 
 describe('what A writes, and where', () => {
@@ -278,22 +257,4 @@ describe('what A writes, and where', () => {
     expect(await refusal(lane.client.request('resources/stat', { uri: 'https://elsewhere.example/tickets/ticket-3' }))).toMatchObject({ code: -32011 });
   });
 
-  it('refuses a ticket that duplicates itself, and adds a duplicate once', async () => {
-    const lane = newLane();
-    const opened = await create(lane, 'tickets/ticket-9', { title: 'Printer jams', status: 'open' });
-    await create(lane, 'tickets/ticket-8', { title: 'Printer jams, too', status: 'open' });
-    expect((await refusal(update(lane, 'tickets/ticket-9', { title: 'Printer jams', status: 'open', duplicateOf: 'ticket-9' }, opened.revision))).code).toBe(-32602);
-    let seven = (await create(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-9' })).revision;
-    // Pointed at ticket-8 and back, ticket-7 is in ticket-9's duplicatedBy once, since a change
-    // of duplicateOf only ever adds.
-    seven = (await update(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-8' }, seven)).revision;
-    seven = (await update(lane, 'tickets/ticket-7', { title: 'Again', status: 'closed', duplicateOf: 'ticket-9' }, seven)).revision;
-    expect(JSON.parse((await read(lane, 'tickets/ticket-9')).text).duplicatedBy).toEqual(['ticket-7']);
-
-    // A write that leaves duplicateOf as it was looks for no ticket, so it goes through after
-    // ticket-9 is deleted, and changes ticket-7 alone.
-    await remove(lane, 'tickets/ticket-9');
-    const renamed = await update(lane, 'tickets/ticket-7', { title: 'Again, renamed', status: 'closed', duplicateOf: 'ticket-9' }, seven);
-    expect(renamed.changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-7`]);
-  });
 });
