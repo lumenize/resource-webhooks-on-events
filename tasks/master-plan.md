@@ -113,7 +113,7 @@ Each client now holds every ticket, and is caught up to `"107"`, the read's `nex
 
 - **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its revision in `_meta` (R7), and `nextFrom`, the timeline's latest moment, which the server reads before the first page's resources. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. Every page repeats the first page's `nextFrom`, which the cursor carries. A resource that doesn't change while the client pages MUST come exactly once. The client catches up from `nextFrom` afterwards, which brings whatever changed while it paged, deletions included. The read never answers `momentExpired` or `momentTooLarge`, and its result is a core `CacheableResult`.
   - A uri on its own is a collection of one, and a client watching one reads it with `resources/collection/read` too, rather than `resources/read`. A copy's revision can be older than the history the server keeps, so a catch-up from it could get `momentExpired` (R21), while `nextFrom` is the timeline's latest moment.
-- **R8.** A client keeps, for each uri-specification it catches up on, the moment it is caught up to, and each copy's revision. A client that catches up on a template and on a uri it covers (D9) is caught up on the uri to at least each `nextFrom` it receives for the template.
+- **R8.** A client keeps, for each uri-specification it catches up on, the moment it is caught up to, and each copy's revision. A client that catches up on two uri-specifications, one of which covers every resource the other does, such as a template and a uri in it (D9), is caught up on the narrower to at least each `nextFrom` it receives for the wider.
 
 #### Step 2, at `"107"`: X and Y subscribe
 
@@ -206,9 +206,9 @@ X's copy is at `"101"`, the patch's `previousRevision`, so X applies it (R19), a
 
 ### Timelines and moments
 
-A timeline's scope is the server's choice. Each of the two examples below serves tickets and notes, and the prototype runs both (D10).
+A timeline's scope is the server's choice, and no client sees it: a client subscribes, catches up and keeps the moment it is caught up to for each uri-specification (R8). Each of the two examples below serves tickets and notes, and the prototype runs both (D10). The names `tickets`, `notes` and `work` are the server's own.
 
-In the first example below, `tickets/{id}` and `notes/{id}` each have a timeline of their own. The happy path starts from this one, at `"107"`:
+In the first example below, `tickets/{id}` and `notes/{id}` each have a timeline of their own, so writes to one never wait on the other (R5), and a client watching both subscribes and catches up on each. The happy path starts from this one, at `"107"`:
 
 ```yaml
 listed:                       # uri-specifications MAY point to separate timelines
@@ -227,12 +227,13 @@ timelines:
       notes/plan: "042"
 ```
 
-In the second example below, closing a ticket also closes its note, in one atomic step, so tickets and notes share a timeline:
+In the second example below, closing a ticket also closes its note, in one atomic step, so tickets and notes share a timeline, and the server also lists `{type}/{id}`, which covers both, beside the templates that describe each type (R1, D9):
 
 ```yaml
 listed:
   tickets/{id}: work
   notes/{id}: work
+  "{type}/{id}": work         # covers both, so it shares their timeline
 timelines:
   work:
     latest: "108"
@@ -241,6 +242,8 @@ timelines:
       tickets/ticket-9: "108" # ticket-9 and its note closed in one atomic step
       notes/ticket-9: "108"
 ```
+
+A catch-up on `{type}/{id}` brings ticket-9 and its note as they stood at one moment. Separate catch-ups on `tickets/{id}` and `notes/{id}` can leave a client holding ticket-9 closed and its note still open until the second one.
 
 - **R1.** A server keeps one or more timelines, from one for everything it serves to one for each uri-specification it lists. Every resource a uri-specification covers is on that uri-specification's timeline, so uri-specifications that cover a resource in common MUST share one, and each resource is on exactly one timeline. Example: `tickets/{id}` and `{kind}/ticket-3` both cover `tickets/ticket-3`, so they share a timeline though neither contains the other. A server assigns timelines over every uri-specification it may ever list to anyone, since listings change and differ by who asks.
 - **R2.** Every change to a resource, its creation and deletion included, happens at a new moment on its timeline, which becomes the timeline's latest moment and the resource's revision.
@@ -412,7 +415,7 @@ IDs follow the order the decisions were recorded, not the order shown, and a gap
 
 Larry's notes, which stay in this file when the proposal is split out of it.
 
-- **Why `notify` only, D5.** My logic here is a tradeoff of optimum efficiency against a political calculation on greater chances of approval. While approval might have come more easily had we stuck more directly with the event Peter's open question 2 sketches, we weighed the benefits of the more efficient design, an event of our own naming a collection (D19), and decided that was the better call. And this flavor has a simpler contract than the prior experiment. Our goal of near real-time is almost completely achieved. And, our goal of efficiency is 50-75% achieved.
+- **Why `notify` only, D5.** My logic here is a tradeoff of optimum efficiency against a political calculation on easier chances of approval. While approval might have come more easily had we stuck more directly with the event Peter's open question 2 sketches, we weighed the benefits of the more efficient design, an event of our own naming a collection (D19), and decided that was the better call. And this flavor has a simpler contract than the prior experiment. Hopefully, Peter will see it the same way. Our goal of near real-time is almost completely achieved. And, our goal of efficiency is 50-75% achieved.
 - **The moment as Lumenize's ETag, D8.** The nice thing for Lumenize though is that we can use the moment as the ETag, so essentially the same logic as before but argued starting with moment and expanding to ETag instead of the other way around.
 - **What Lumenize publishes.** In Lumenize's case, we'd publish uriTemplates only.
 - **Why a one-call subscribe is only an open question, Q7.** It's a cleaner DX, but making the first draft we share with the group events-style still gets us 90% of the benefits: it connects this work to SEP-3415 and gains Peter's good will. We'll leave it up to the group to decide.
