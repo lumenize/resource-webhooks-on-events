@@ -479,7 +479,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 **What comes in.**
 
-- **Code:** everything § *Current state* carries. Also `src/auth/` and `src/client/mcp-client.ts` as they stand, on DCR, for Phase 2 to adapt, and `src/server-role/deliveries.ts` as it stands, since `src/server.ts` builds its `send` from it, for Phase 6 to adapt. `src/server-role/validation.ts` and `scripts/generate-schemas.mjs` come in cut down to the spec's schema and `events-types`.
+- **Code:** everything § *Current state* carries. Also `src/auth/` and `src/client/mcp-client.ts` as they stand, on DCR, for Phase 2 to adapt. `src/server-role/deliveries.ts` waits for Phase 6, since A sends nothing before then, so `src/server.ts` builds no `send` yet. `src/server-role/validation.ts` and `scripts/generate-schemas.mjs` come in cut down to the spec's schema and `events-types`.
 - **The server role:** `src/server-role/server-role.ts` comes in reduced to MCP's lifecycle, `resources/list` and `resources/templates/list` with no resources yet, `resources/read`, and `tools/list` and `tools/call`, each over `ServerExtras` alone, so the conformance build keeps its fixture resources, templates and tools. A declares `tools` only when extras supply some, so A's own tools are gone (D7). Phase 3 adds A's own resources.
 - **The Wipe** keeps a count of Wipes in A's storage, which `TokenClaims.epoch` and the registration cap read in place of `VersionStore.epoch()`.
 - **Root files:** `package.json`, `package-lock.json`, `wrangler.jsonc`, `wrangler.conformance.jsonc`, `vitest.config.ts`, `tsconfig.json`, `worker-configuration.d.ts` (regenerated), `.nvmrc`, `.dev.vars.example` and `conformance-baseline.yml`, named for this repo. The page's build stays behind with the demo page: `tsconfig.page.json`, `public/`, the `assets` and `build` entries, `build:page`, the `browser` project, and `deployed.mjs`'s rewrite of `./public`. `deployed.mjs` and `build-checks.test.ts` call the bundle check by its new name, `scripts/check-deploy-bundle.mjs`. Each copied file's entry comes into `ATTRIBUTIONS.md` with it.
@@ -557,7 +557,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 **Goal.** Plain requests read a collection and catch up on it, with no subscription (R13, R21, R22, R24, D3, D12, D23).
 
-**What comes in.** `#listing` in `src/server-role/resource-webhooks.ts` becomes `resources/collection/read`, and `#catchUp` becomes `resources/collection/catchup`, as § *Current state* says. `src/mcp-http.ts` takes `Mcp-Name` for both from `uri` or `uriTemplate`. A named uriTemplate is at most 1 KiB, and a named uri at most 2 KiB. A read stops a page after `SCAN_LIMIT` rows scanned, or once its contents pass `PAGE_BYTES`, with a short page and a `nextCursor`, and a catch-up stops short the same way. A vitest project, `lane-limits`, sets both small.
+**What comes in.** The `lane-paged` vitest project, which Phase 1 left out while it had no test to run. `#listing` in `src/server-role/resource-webhooks.ts` becomes `resources/collection/read`, and `#catchUp` becomes `resources/collection/catchup`, as § *Current state* says. `src/mcp-http.ts` takes `Mcp-Name` for both from `uri` or `uriTemplate`. A named uriTemplate is at most 1 KiB, and a named uri at most 2 KiB. A read stops a page after `SCAN_LIMIT` rows scanned, or once its contents pass `PAGE_BYTES`, with a short page and a `nextCursor`, and a catch-up stops short the same way. A vitest project, `lane-limits`, sets both small.
 
 **Success criteria (capable of failing).**
 
@@ -660,6 +660,30 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - **A second deployed instance.** The split layout differs from the shared one only in data the lane tests on both.
 - **Plain HTTP access to resources** (D8), and A's own tools (D7).
 - **The reference implementation in the official TypeScript SDK,** which § *Relationships* says this gates.
+
+## Build notes
+
+### Phase 1
+
+**For Larry.** Nothing needs a decision. Two things differ from the phase as written. `src/server-role/deliveries.ts` waits for Phase 6, since A sends nothing until then and `src/server.ts` no longer builds a `send`, and the phase text now says so. B's event-free tests went into `test/lane/gateway.test.ts`, with the page controls' event-free tests beside them (the greeting, the refusals, and B's Wipe closing every socket).
+
+**Retro.**
+
+- The carried code was close to standing alone: once the left-behind imports went, the server role was cut to MCP's core, and `server.ts` read a Wipe count from its own storage, 248 of the 249 carried tests passed on the first run.
+- The one failure was a flaw the first flavor's `edge.test.ts` already had: its case probe upper-cased the lane's name, which is unchanged when the random suffix is all digits. The probe now lower-cases the `A`.
+- A mutation loop in zsh first reported every mutation as surviving, because an unquoted `$M` holding a command with spaces is one word, so nothing ran. Lumenize's `scripts/mutate.mjs` was right each time; the loop around it was wrong.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs`, each turning exactly the test named red:
+
+- The Wipe leaving its count alone: `authorization.test.ts`'s token-after-a-Wipe test.
+- A left-behind import restored in `server.ts`: `left-behind.test.ts`. Run against the first flavor's tree with `SCAN_ROOT`, the same scan found all ten names.
+- The role serving tool methods with no tools, and discovery claiming `tools`: one `mcp-core.test.ts` test each.
+- The edge matching instance names case-insensitively: `edge.test.ts`'s routing test.
+- B skipping signature verification: two `gateway.test.ts` tests.
+- The conformance build giving subscribes a token, and the role dropping a host's tools: one `conformance-build.test.ts` test each.
+- The fetch spy routing by the file's env, the controls accepting any token, and `CONFORMANCE` in `wrangler.jsonc`: `fetch-spy.test.ts`, `lane-closed/controls.test.ts` and `build-checks.test.ts`.
+
+**Close-out.** The suite is 250 tests in 15 files, all passing. `npm install` warns that npm 11 skipped the install scripts of `esbuild`, `fsevents` and `workerd`, and every lane and harness test runs regardless. The token endpoint's tests log a workerd warning that a form body is read with `.text()`, as the first flavor's did.
 
 ## Notes kept out of the proposal
 
