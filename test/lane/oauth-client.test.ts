@@ -85,6 +85,17 @@ describe('the client half of authorization', () => {
     expect(registered()).toBe(1);
   });
 
+  it('signs in once for requests that need a token at the same time', async () => {
+    const { send, calls } = fakeServers();
+    const session = new OAuthSession({ redirectUri: REDIRECT, fetch: send });
+    const tokens = await Promise.all([session.tokenFor(`${RS}/mcp`), session.tokenFor(`${RS}/mcp`, null, { refresh: true }), session.tokenFor(`${RS}/mcp`)]);
+    expect(tokens).toEqual(['token-for-client-1', 'token-for-client-1', 'token-for-client-1']);
+    expect(calls.filter(({ url }) => url.endsWith('/token'))).toHaveLength(1);
+    // Once it has finished, a refresh signs in again.
+    expect(await session.tokenFor(`${RS}/mcp`, null, { refresh: true })).toBe('token-for-client-1');
+    expect(calls.filter(({ url }) => url.endsWith('/token'))).toHaveLength(2);
+  });
+
   it('registers again, once, when the server has forgotten its client', async () => {
     const { send, registrations } = fakeServers({ forgetClients: 1 });
     const session = new OAuthSession({ redirectUri: REDIRECT, fetch: send });

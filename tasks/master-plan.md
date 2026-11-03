@@ -736,7 +736,67 @@ Residuals to know of:
 - In `gateway.test.ts`: B superseding by instance alone turns the ownership test red, and the edge routing any instance the refusal test. Leaving out the hook message turns every test that listens red, since `listen` checks it.
 - In `oauth-client.test.ts`: the client ignoring its document turns the new test red, and leaving out the DCR fallback turns it red with the three DCR tests. In `authorization.test.ts`, the client keeping no cookie turns the client-session test red.
 
+**The verifier's findings,** fixed in Phase 3's commit, since they share its files:
+
+- B's sockets had lost their bound: a token for any instance's socket is had for the asking, and A's cap bounds only how many subjects there are. B now holds at most `SOCKETS_PER_SUBJECT`, 10, for one subject, at different instances, and answers a further upgrade `429`. The name is new and yours to keep or rename.
+- The ownership test sent one body to both hooks, so it could pass with each delivery reaching both sockets. Each hook now gets a body of its own.
+- The cap test now shows that a grant with a pre-Wipe cookie makes an account that counts.
+- A read a document's body outside the fetch's `try`, so a body that stalled after its headers answered `500` and sent no report. It now times out and is reported as `timeout`. Testing it showed that the lane's fake receivers ignored the request's signal once their headers were sent, which `fetch` does not, so `test/lane/setup.ts` now aborts their bodies too.
+- The account cookie carries `Max-Age` of a year, as design item 2's "every later sign-in from that browser" needs.
+- Four comments claimed more than the code does, and now say less.
+
+A residual the verifier named: A reports each document fetch's status and error code on its open back channel, so anyone can learn the status of a public https URL through A. The back channel is the demo's, and stays open for it.
+
 **Close-out.** The suite is 260 tests in 15 files, all passing, and both conformance suites pass. `auth/basic-cimd:cimd-client-id-used` has left `conformance-baseline.yml`. `OAuthSession.clientIdFor` went, since a client id no longer names a principal and nothing called it.
+
+### Phase 3
+
+**For Larry.** Nothing needs a decision before Phase 4. These names are new in code, each yours to keep or rename:
+
+- The strawman's types in `src/extension-types.ts`, named in the spec's style after `ReadResourceRequest`: `StatResourceRequest`, `CreateResourceRequest`, `UpdateResourceRequest` and `DeleteResourceRequest`, with `StatResourceResult`, `WriteResourceResult`, `DeleteResourceResult`, `ChangeSetEntry`, `ChangeEffect` and `WriteContents`.
+- `PRECONDITION_FAILED` for the strawman's `-32010`, after the HTTP `412` its text cites, and `NOT_SUPPORTED` for `-32011`.
+- `RESOURCE_OPERATIONS_EXTENSION` for the strawman's identifier, `MAX_URI_BYTES` and `MAX_CONTENTS_BYTES`, the layouts `shared` and `split`, and the timelines `work`, `tickets` and `notes`, which come from the proposal's examples.
+
+Choices the phase made where the task file left one open:
+
+- A moment is a counter zero-padded to 12 digits, as `000000000107`.
+- A declares the strawman's extension, `io.modelcontextprotocol/resource-operations`, with no settings, since the strawman says clients must not call its methods on a server that doesn't.
+- A answers `notSupported` for a uri outside its two types: one beneath a ticket, another server's, or `lists/x`, which `{type}/{id}` covers on the shared map though no type of A's names it.
+- The strawman's two provisional codes answer HTTP `500`, as the carried mapping answers every implementation-defined code, SEP-3415's included.
+- `resources/stat` answers `cacheScope` `private`, the strawman's default.
+- The cascade runs on a create as on an update. Closing a ticket sets its note's `done` when the note exists, and `duplicateOf` only ever adds to a ticket's `duplicatedBy`. A ticket that names itself is refused.
+- `resources/list` lists none of A's tickets or notes, and `resources/templates/list` lists the layout's templates.
+- A superseded row loses its contents once the write that superseded it is older than `CUTOFF_WINDOW_MS`.
+- Both prunes run at the end of every write, in its transaction. Phase 4's R21 criteria test them, as the phase plan has it.
+
+Residuals to know of:
+
+- Changing a ticket's `duplicateOf` leaves the earlier ticket's `duplicatedBy` naming it.
+- A delete runs no cascade, so a deleted ticket's note stays, and so does a mention of it in another ticket's `duplicatedBy`.
+
+**Retro.**
+
+- The first run of R5's test failed on the account cap: twenty requests at once each met a `401` and signed in, so the lane's session made twenty accounts. The client now shares one sign-in per endpoint among the requests that meet a `401` while it runs, which a browser opening many requests at once needs too.
+- A write is synchronous, so R5's test can fail only when a write mints, awaits, and then commits. Its mutation made a create read the latest moment, wait a millisecond, and commit with no check, and the test went red.
+- B's socket cap first counted after closing the socket it replaced, which stays listed until its client answers the close, so a reconnect at the cap was refused. Its test also dropped the client end of each socket it opened, which the runtime may close, so it passed or failed by timing. B now counts before it closes, and the test holds each socket open, as a client does.
+- Two mutations first showed as surviving. In one, the replacement text, `;`, wasn't unique, so `mutate.mjs` refused it, which the loop around it reported as a survivor. The loop now reports a refusal as one. The other was real: two guards on `duplicatedBy` overlapped, so no test reached either alone, and the duplicate test now does.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red, on both layouts where the test runs on both:
+
+- R1's test, for a check that refuses only one specification matching the other, which passes `{kind}/ticket-3`, and for skipping the check.
+- R2 and R3's, for moments with no padding, which also turns R5's red.
+- R4's two, for minting a moment per resource. The note test, for committing the note in a write of its own, and for leaving the note open. The duplicate test, for leaving `duplicatedBy` alone.
+- R5's, for minting before an await and committing after it with no check.
+- The refused-write test, for running the write outside `transactionSync`.
+- R7's first test, for a deletion's entry with no `revision`, and for a read with no revision in `_meta`. R7's second, for dropping the `alreadyExists` check and either `ifMatch` check.
+- R17's, for storing `JSON.stringify` of the parsed contents.
+- The bounds tests, for dropping either bound, and for refusing a uri at exactly 2 KiB.
+- The abort test, for keeping the latest moment only in memory.
+- The Wipe test, for leaving the latest moment as it was, and for leaving the oldest as it was.
+- The refusals test, for dropping the type check, the `contents.uri` check, or the type in `notSupported`'s check. The duplicate test, for a ticket duplicating itself, for adding a duplicate twice, and for looking up `duplicateOf` on every write.
+- For the Phase 2 fixes: B's cap test, for dropping the cap and for counting the instance a socket replaces. The cookie test, for dropping `Max-Age`. The report test, for reading the body outside the `try`. The client's single sign-in test, for starting a sign-in on every call.
+
+**Close-out.** The suite is 292 tests in 17 files, all passing, and both conformance suites pass. Phase 2's verifier findings are fixed here. The R21 prunes are built and wait for Phase 4's tests.
 
 ## Notes kept out of the proposal
 

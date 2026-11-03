@@ -26,6 +26,8 @@ const CODE_LIFETIME_SECONDS = 60;
 const LOOPBACK = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\//;
 /** The cookie that names a browser's account, as `<wipes>.<sub>.<mac>`. */
 const ACCOUNT_COOKIE = 'rw_account';
+/** How long a browser keeps its account cookie: a year. */
+const ACCOUNT_COOKIE_SECONDS = 365 * 24 * 3600;
 
 interface CodeClaims {
   cid: string;
@@ -144,7 +146,7 @@ export class AuthorizationServer {
     );
   }
 
-  /** Forgets the redeemed codes, as a Wipe does. The Wipe count voids every cookie, code and token. */
+  /** Forgets the redeemed codes, as a Wipe does. The Wipe count voids every cookie, code and token A checks. */
   clear(): void {
     this.#sql.exec('DELETE FROM RedeemedCodes');
   }
@@ -187,10 +189,11 @@ export class AuthorizationServer {
   }
 
   // Sent only to the authorization endpoint, never readable by a page, and never on a request
-  // another site starts, so a sign-in another site frames or links to makes a new account.
+  // another site starts, so a sign-in another site frames or links to makes a new account. It
+  // outlives the browser session, so every later sign-in from the browser is the same account.
   async #accountCookie(wipes: number, sub: string): Promise<string> {
     const value = `${wipes}.${sub}`;
-    return `${ACCOUNT_COOKIE}=${value}.${await mac(this.#options.secret, 'account', value)}; Path=/authorize; HttpOnly; Secure; SameSite=Strict`;
+    return `${ACCOUNT_COOKIE}=${value}.${await mac(this.#options.secret, 'account', value)}; Path=/authorize; Max-Age=${ACCOUNT_COOKIE_SECONDS}; HttpOnly; Secure; SameSite=Strict`;
   }
 
   async #codeClaims(code: string): Promise<CodeClaims | undefined> {

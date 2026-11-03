@@ -15,12 +15,12 @@ afterEach(() => {
 // Runs `generate-schemas.mjs --check` on a copy of src/ whose types may have been edited.
 function check(edit: (types: string) => string): { exitCode: number; output: string } {
   scratch = mkdtempSync(join(tmpdir(), 'schema-check-'));
-  const files = ['events-types'].flatMap((name) => [`${name}.ts`, `${name}.schema.json`]);
-  // events-types.ts takes its base types from the spec's schema.ts.
+  const files = ['resource-types', 'events-types', 'extension-types'].flatMap((name) => [`${name}.ts`, `${name}.schema.json`]);
+  // events-types.ts and extension-types.ts take their base types from the spec's schema.ts.
   for (const file of [...files, 'vendor/mcp-spec/2026-07-28/schema.ts']) {
     cpSync(join(import.meta.dirname, '../../src', file), join(scratch, 'src', file));
   }
-  const types = join(scratch, 'src/events-types.ts');
+  const types = join(scratch, 'src/resource-types.ts');
   writeFileSync(types, edit(readFileSync(types, 'utf-8')));
   try {
     const output = execFileSync(process.execPath, [SCRIPT, '--check'], { cwd: scratch, encoding: 'utf-8', stdio: 'pipe' });
@@ -35,8 +35,8 @@ it('passes on the committed types and schema', () => {
   expect(check((types) => types)).toMatchObject({ exitCode: 0 });
 });
 
-it('fails when EventType gains a member the committed schema does not have', () => {
-  const result = check((types) => types.replace('  description?: string;\n', '  description?: string;\n  priority?: number;\n'));
+it('fails when Note gains a member the committed schema does not have', () => {
+  const result = check((types) => types.replace('  due?: string;\n', '  due?: string;\n  priority?: number;\n'));
   expect(result.exitCode).toBe(1);
   expect(result.output).toContain('is out of date');
 });

@@ -1,8 +1,9 @@
 // B, the gateway: a webhook receiver for each of its clients, and each client's WebSocket. A
 // client is a subject's instance, as `u_7Hq2…/i_Kp3…`, the subject from the token and the
 // instance from the socket's path, so another subject's token cannot take a socket over. B keeps
-// a client's secret in the socket's attachment and stores nothing. The edge has checked the
-// token on a client's upgrade, and passes its claims in CLAIMS_HEADER.
+// a client's secret in the socket's attachment, and stores nothing but the alarm that closes
+// expired sockets. The edge has checked the token on a client's upgrade, and passes its claims
+// in CLAIMS_HEADER.
 import { DurableObject } from 'cloudflare:workers';
 import { acceptPage, authorized, PAGE_TAG, report, type Control } from './back-channel';
 import { CLAIMS_HEADER } from './edge';
@@ -16,6 +17,11 @@ export const SUBPROTOCOL = 'rw.1';
 export const TOKEN_EXPIRED = 4401;
 /** The close code for a socket a newer one from the same client replaced. */
 export const SUPERSEDED = 4000;
+/**
+ * How many sockets one subject may hold at once, one per instance, since a token for any
+ * instance's socket is had for the asking, and A's cap bounds only how many subjects there are.
+ */
+export const SOCKETS_PER_SUBJECT = 10;
 
 interface Attachment {
   /** The subject and the instance, as `u_7Hq2…/i_Kp3…`, which the client's hook path ends in. */
@@ -107,10 +113,14 @@ export class Gateway extends DurableObject<Env> {
     const claims = JSON.parse(request.headers.get(CLAIMS_HEADER) ?? 'null') as { sub: string; exp: number } | null;
     if (!claims) return new Response('Unauthorized', { status: 401 });
     const client = `${claims.sub}/${instance}`;
-    const [browserSide, server] = Object.values(new WebSocketPair());
+    // Counted before the older socket closes, since a closed socket may stay listed until its
+    // client answers, and only at other instances, since this socket replaces its own.
+    const held = this.ctx.getWebSockets(`subject:${claims.sub}`).filter((socket) => !this.ctx.getTags(socket).includes(`client:${client}`));
+    if (held.length >= SOCKETS_PER_SUBJECT) return new Response('Too Many Requests: this subject holds as many sockets as it may', { status: 429 });
     // A client that reconnects replaces its older sockets, as Lumenize's ClientGateway does.
     for (const older of this.ctx.getWebSockets(`client:${client}`)) older.close(SUPERSEDED, 'Superseded by a newer connection');
-    this.ctx.acceptWebSocket(server, [`client:${client}`]);
+    const [browserSide, server] = Object.values(new WebSocketPair());
+    this.ctx.acceptWebSocket(server, [`client:${client}`, `subject:${claims.sub}`]);
     server.serializeAttachment({ client, exp: claims.exp, connectedAt: new Date().toISOString() } satisfies Attachment);
     // The hook URL the client subscribes with, the same across its reconnects.
     server.send(JSON.stringify({ type: 'hook', hookUrl: `${this.env.ORIGIN}/gateway/${this.ctx.id.name!}/hooks/${client}` }));

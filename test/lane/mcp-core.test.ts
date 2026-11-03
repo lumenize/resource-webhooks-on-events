@@ -34,26 +34,30 @@ async function refusal(promise: Promise<unknown>): Promise<{ status: number; cod
 }
 
 describe('the core methods', () => {
-  it('discovers one protocol version and resources, and no tools, since A has none of its own', async () => {
+  it("discovers one protocol version, resources and the strawman's resource operations, and no tools, since A has none of its own", async () => {
     const lane = newLane();
     expect(await lane.client.request('server/discover')).toEqual({
       resultType: 'complete',
       supportedVersions: ['2026-07-28'],
-      capabilities: { resources: {} },
+      capabilities: { resources: {}, extensions: { 'io.modelcontextprotocol/resource-operations': {} } },
       ttlMs: 0,
       cacheScope: 'public',
       _meta: META,
     });
   });
 
-  it('serves no tool methods, and lists no resources or templates, until a host adds some', async () => {
+  it("serves no tool methods, and lists no resources, and its layout's templates alone, until a host adds some", async () => {
     const lane = newLane();
     for (const method of ['tools/list', 'tools/call']) {
       const refused = await refusal(lane.client.request(method, method === 'tools/call' ? { name: 'any_tool', arguments: {} } : {}));
       expect({ method, status: refused.status, code: refused.code }).toEqual({ method, status: 404, code: -32601 });
     }
     expect(await lane.client.request('resources/list')).toMatchObject({ resources: [] });
-    expect(await lane.client.request('resources/templates/list')).toMatchObject({ resourceTemplates: [] });
+    const templatesOf = async (of: typeof lane) =>
+      ((await of.client.request('resources/templates/list')).resourceTemplates as { uriTemplate: string }[]).map(({ uriTemplate }) => uriTemplate);
+    expect(await templatesOf(lane)).toEqual([`${lane.root}/tickets/{id}`, `${lane.root}/notes/{id}`, `${lane.root}/{type}/{id}`]);
+    const split = newLane('split');
+    expect(await templatesOf(split)).toEqual([`${split.root}/tickets/{id}`, `${split.root}/notes/{id}`]);
   });
 
   it('refuses a URI it does not serve with the URI in data', async () => {

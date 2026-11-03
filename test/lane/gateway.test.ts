@@ -7,6 +7,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { signToken } from '../../src/auth/signing';
+import { SOCKETS_PER_SUBJECT } from '../../src/gateway';
 import { deliveryHeaders } from '../../src/standard-webhooks';
 import { hookUrl, listen, signedIn, socketUrl, watch } from '../client/parties';
 import { callWorker, newLane, upgrade, type Lane } from './lane';
@@ -106,12 +107,42 @@ describe('B, the gateway', () => {
     const second = await listen(lane, { ...c, instance: b.instance });
     expect(second.hookUrl).toBe(hookUrl(lane, { sub: c.sub, instance: b.instance }));
 
-    expect((await postToB(lane, first.hookUrl, BODY, await signedFor(first.secret, BODY))).status).toBe(200);
-    expect((await postToB(lane, second.hookUrl, BODY, await signedFor(second.secret, BODY))).status).toBe(200);
+    // Each hook's delivery reaches its own socket alone.
+    const [toFirst, toSecond] = [BODY.replace('"x"', '"first"'), BODY.replace('"x"', '"second"')];
+    expect((await postToB(lane, first.hookUrl, toFirst, await signedFor(first.secret, toFirst))).status).toBe(200);
+    expect((await postToB(lane, second.hookUrl, toSecond, await signedFor(second.secret, toSecond))).status).toBe(200);
     await vi.waitFor(() => expect([first.deliveries().length, second.deliveries().length]).toEqual([1, 1]));
+    await sleep(100);
+    expect(first.deliveries().map(({ body }) => body)).toEqual([JSON.parse(toFirst)]);
+    expect(second.deliveries().map(({ body }) => body)).toEqual([JSON.parse(toSecond)]);
     // c's secret opens nothing at b's hook.
     expect((await postToB(lane, first.hookUrl, BODY, await signedFor(second.secret, BODY))).status).toBe(401);
     expect(first.closes).toEqual([]);
+  });
+
+  it('refuses a subject a socket past SOCKETS_PER_SUBJECT with 429, and leaves another subject its own', async () => {
+    const lane = newLane();
+    const b = await signedIn(lane, 'b');
+    const c = await signedIn(lane, 'c');
+    // Each socket is held open, as a client holds it.
+    const held: WebSocket[] = [];
+    const open = async (party: typeof b, instance: string) => {
+      const url = socketUrl(lane, instance);
+      const response = await upgrade(lane.env, url, await party.session.tokenForResource(env.ORIGIN, url));
+      response.webSocket?.accept();
+      if (response.webSocket) held.push(response.webSocket);
+      return response.status;
+    };
+    try {
+      for (let i = 0; i < SOCKETS_PER_SUBJECT; i++) expect(await open(b, `i_${i}`)).toBe(101);
+      expect(await open(b, 'i_one-more')).toBe(429);
+      // A reconnect at an instance b holds replaces its socket, and c holds sockets of its own.
+      expect(await open(b, 'i_0')).toBe(101);
+      expect(await open(b, 'i_one-more')).toBe(429);
+      expect(await open(c, 'i_one-more')).toBe(101);
+    } finally {
+      for (const socket of held) socket.close(1000, 'Done');
+    }
   });
 
   it('closes a socket with 4401 when its token expires', async () => {

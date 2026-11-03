@@ -311,14 +311,21 @@ describe('the authorization server', () => {
     documents.set(hanging, () => new Promise<Response>(() => {}));
     const notJson = `${DOCS}/not-json.json`;
     documents.set(notJson, () => new Response('{', { status: 200 }));
-    for (const url of [good, missing, unresolved, hanging, notJson]) await authorize(lane, grant(url, challenge, `${lane.root}/mcp`));
-    await vi.waitFor(() => expect(page.reports().filter((report) => report.kind === 'document')).toHaveLength(5));
+    // Headers at once, and a body that never ends.
+    const stalling = `${DOCS}/stalling.json`;
+    documents.set(stalling, () => new Response(new ReadableStream({ start: (controller) => controller.enqueue(new TextEncoder().encode('{')) }), { status: 200 }));
+    for (const url of [good, missing, unresolved, hanging, notJson, stalling]) {
+      const response = await authorize(lane, grant(url, challenge, `${lane.root}/mcp`));
+      expect({ url, status: response.status }).toEqual({ url, status: url === good ? 302 : 400 });
+    }
+    await vi.waitFor(() => expect(page.reports().filter((report) => report.kind === 'document')).toHaveLength(6));
     expect(page.reports().filter((report) => report.kind === 'document')).toEqual([
       { party: 'A', kind: 'document', url: good, status: 200 },
       { party: 'A', kind: 'document', url: missing, status: 404 },
       { party: 'A', kind: 'document', url: unresolved, status: 530, errorCode: 1016 },
       { party: 'A', kind: 'document', url: hanging, failure: 'timeout' },
       { party: 'A', kind: 'document', url: notJson, status: 200, failure: 'not_json' },
+      { party: 'A', kind: 'document', url: stalling, failure: 'timeout' },
     ]);
   });
 
@@ -400,7 +407,7 @@ describe('the authorization server', () => {
     const first = await signInAs(lane);
     const cookie = cookieOf(first.setCookie);
     const attributes = first.setCookie!.split(';').slice(1).map((attribute) => attribute.trim());
-    expect(attributes.sort()).toEqual(['HttpOnly', 'Path=/authorize', 'SameSite=Strict', 'Secure']);
+    expect(attributes.sort()).toEqual(['HttpOnly', 'Max-Age=31536000', 'Path=/authorize', 'SameSite=Strict', 'Secure']);
 
     // The same browser is the same account, and gets no new cookie.
     expect(await signInAs(lane, cookie)).toEqual({ sub: first.sub, setCookie: null });
@@ -423,7 +430,7 @@ describe('the authorization server', () => {
     expect([again, socket]).toEqual([first, first]);
   });
 
-  it('refuses a new account past the cap since the Wipe, a returning one still signing in, and takes one after a Wipe', async () => {
+  it('refuses a new account past the cap since the Wipe, a returning one still signing in, and counts afresh after a Wipe', async () => {
     const lane = newLane();
     const { challenge } = await pkce();
     const first = await signInAs(lane);
@@ -433,9 +440,11 @@ describe('the authorization server', () => {
     expect(refused.headers.get('Set-Cookie')).toBeNull();
     expect((await signInAs(lane, cookieOf(first.setCookie))).sub).toBe(first.sub);
 
+    // After a Wipe, a grant with a cookie from before it is a new account, which counts.
     const page = await watch(lane, 'A');
     await page.control('wipe');
-    expect((await signInAs(lane)).setCookie).not.toBeNull();
+    for (let i = 0; i < Number(env.REGISTRATION_CAP); i++) expect((await signInAs(lane, cookieOf(first.setCookie))).setCookie).not.toBeNull();
+    expect(redirectedError(await authorize(lane, grant(OWN, challenge, `${lane.root}/mcp`)))).toBe('temporarily_unavailable');
   });
 
   it('refuses a body over 16 KiB on its routes before A wakes', async () => {

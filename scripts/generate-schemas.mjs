@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates JSON Schema for the types in src/events-types.ts, the way the MCP spec generates
+// Generates JSON Schema for this repo's type files, the way the MCP spec generates
 // schema.json from schema.ts: typescript-json-schema with the spec's flags, then the spec's
 // rewrite to JSON Schema 2020-12. With --check it compares instead of writing, and exits 1 when
 // the committed schema is stale, as the spec's `generate-schemas.ts --check` does.
@@ -10,7 +10,9 @@ import { fileURLToPath } from 'node:url';
 
 // Paths are relative to the working directory, and the generator is this repo's own.
 const PAIRS = [
+  { source: 'src/resource-types.ts', target: 'src/resource-types.schema.json' },
   { source: 'src/events-types.ts', target: 'src/events-types.schema.json' },
+  { source: 'src/extension-types.ts', target: 'src/extension-types.schema.json' },
 ];
 const GENERATOR = fileURLToPath(new URL('../node_modules/typescript-json-schema/bin/typescript-json-schema', import.meta.url));
 

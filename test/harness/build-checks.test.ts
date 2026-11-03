@@ -57,7 +57,7 @@ const PLATFORM = [
 // What a role module may import, so it cannot reach the platform through another module.
 const ROLE_IMPORTS = [
   /^\.\/[\w-]+$/,
-  /^\.\.\/(json-rpc|resource-types|events-types|standard-webhooks)$/,
+  /^\.\.\/(json-rpc|resource-types|events-types|extension-types|standard-webhooks)$/,
   /^\.\.\/[\w-]+\.schema\.json$/,
   /^\.\.\/vendor\/mcp-spec\//,
   /^\.\.\/vendor\/lumenize-merge-patch\/merge-patch$/,

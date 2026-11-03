@@ -1,0 +1,57 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$defs": {
+        "Note": {
+            "additionalProperties": false,
+            "description": "A note, such as `{ \"title\": \"Buy milk\", \"due\": \"2026-10-24\" }`. A ticket's note shares its id,\nas `notes/ticket-3` for `tickets/ticket-3`, and closing the ticket sets its `done`.",
+            "properties": {
+                "done": {
+                    "type": "boolean"
+                },
+                "due": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "title"
+            ],
+            "type": "object"
+        },
+        "Ticket": {
+            "additionalProperties": false,
+            "description": "A ticket, such as `{ \"title\": \"Printer jams\", \"status\": \"open\" }`. Setting `duplicateOf` to\nanother ticket's id adds this ticket's id to that one's `duplicatedBy`, in the same write.",
+            "properties": {
+                "duplicateOf": {
+                    "description": "The id of the ticket this one duplicates, as `ticket-9`.",
+                    "type": "string"
+                },
+                "duplicatedBy": {
+                    "description": "The ids of the tickets that duplicate this one, as `[\"ticket-7\"]`.",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "status": {
+                    "enum": [
+                        "closed",
+                        "open"
+                    ],
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "status",
+                "title"
+            ],
+            "type": "object"
+        }
+    }
+}
+

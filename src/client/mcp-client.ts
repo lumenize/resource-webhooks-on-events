@@ -217,8 +217,12 @@ export class OAuthSession {
   // Tokens per endpoint or resource they were got for, and the scope each was asked for.
   readonly #tokens = new Map<string, string>();
   readonly #scopes = new Map<string, Set<string>>();
-  // The cookies each authorization endpoint's origin set, by name, kept as a browser keeps them,
-  // so a server that knows a browser by its cookie knows this session the same way.
+  // The sign-in under way for each endpoint, which every request that meets a 401 meanwhile
+  // shares, so concurrent requests sign in once.
+  readonly #signingIn = new Map<string, Promise<string>>();
+  // The cookies each authorization endpoint's origin set, by name, sent back to that origin's
+  // authorization endpoint, the one URL this session follows a redirect from, so a server that
+  // knows a browser by its cookie knows this session the same way. Their attributes are ignored.
   readonly #cookies = new Map<string, Map<string, string>>();
 
   constructor(options: OAuthOptions) {
@@ -238,6 +242,14 @@ export class OAuthSession {
   async tokenFor(endpoint: string, challenge?: string | null, { refresh = false } = {}): Promise<string> {
     const cached = this.#tokens.get(endpoint);
     if (cached && !refresh) return cached;
+    const pending = this.#signingIn.get(endpoint);
+    if (pending) return pending;
+    const signingIn = this.#signIn(endpoint, challenge).finally(() => this.#signingIn.delete(endpoint));
+    this.#signingIn.set(endpoint, signingIn);
+    return signingIn;
+  }
+
+  async #signIn(endpoint: string, challenge: string | null | undefined): Promise<string> {
     const parsed = parseChallenge(challenge ?? '');
     const resource = await this.#resourceMetadata(endpoint, parsed.resource_metadata);
     // RFC 9728 § 3.3: metadata naming another resource must not be used.
@@ -266,7 +278,7 @@ export class OAuthSession {
     try {
       return await this.#codeFlow(server, client, resource, scope);
     } catch (error) {
-      // A server that forgot this client, as after a Wipe, is registered with again, once.
+      // A server that forgot a client it registered is registered with again, once.
       if (!(error instanceof OAuthError) || error.error !== 'invalid_client' || !client.registered) throw error;
       this.#clients.delete(server.issuer);
       return this.#codeFlow(server, await this.#client(server), resource, scope);

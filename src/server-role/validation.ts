@@ -1,7 +1,10 @@
 // Runtime validation, derived from TypeScript types only: the spec's schema.json, generated from
-// its schema.ts, and this repo's own schema, generated from events-types.ts.
+// its schema.ts, and this repo's own schemas, generated from resource-types.ts, events-types.ts
+// and extension-types.ts.
 import { Validator, type OutputUnit } from '@cfworker/json-schema';
 import eventsSchema from '../events-types.schema.json';
+import extensionSchema from '../extension-types.schema.json';
+import resourceSchema from '../resource-types.schema.json';
 import specSchema from '../vendor/mcp-spec/2026-07-28/schema.json';
 
 type SchemaFile = { $defs: Record<string, object> };
@@ -26,6 +29,11 @@ export function specErrors(definition: string, value: unknown): OutputUnit[] {
   return errorsFor(specSchema as SchemaFile, 'schema.json', definition, value);
 }
 
+/** Errors in a ticket's or a note's parsed contents, or none. */
+export function resourceErrors(definition: 'Ticket' | 'Note', value: unknown): OutputUnit[] {
+  return errorsFor(resourceSchema as SchemaFile, 'resource-types.schema.json', definition, value);
+}
+
 function requestDefinitions(file: SchemaFile, fileName: string): [string, { file: SchemaFile; fileName: string; definition: string }][] {
   return Object.entries(file.$defs).flatMap(([name, definition]) => {
     const { properties, required } = definition as { properties?: { method?: { const?: string } }; required?: string[] };
@@ -36,12 +44,14 @@ function requestDefinitions(file: SchemaFile, fileName: string): [string, { file
 
 /**
  * The request definition for each method a schema defines a request for, as `resources/read` to
- * the spec's `ReadResourceRequest` and `events/subscribe` to SEP-3415's `EventsSubscribeRequest`,
- * read from each schema's `method` constants.
+ * the spec's `ReadResourceRequest`, `events/subscribe` to SEP-3415's `EventsSubscribeRequest` and
+ * `resources/update` to the strawman's `UpdateResourceRequest`, read from each schema's `method`
+ * constants.
  */
 const REQUEST_DEFINITIONS = new Map([
   ...requestDefinitions(specSchema as SchemaFile, 'schema.json'),
   ...requestDefinitions(eventsSchema as SchemaFile, 'events-types.schema.json'),
+  ...requestDefinitions(extensionSchema as SchemaFile, 'extension-types.schema.json'),
 ]);
 
 /** Errors in a request against its method's definition, or undefined when no schema defines it. */

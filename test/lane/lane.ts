@@ -49,7 +49,7 @@ export interface Lane extends Tier {
   stub: DurableObjectStub<import('../../src/index').Server>;
   /** Requests `path` under A's root, as `/mcp`, as it is given, with no token added. */
   fetch(path: string, init?: RequestInit): Promise<Response>;
-  /** An MCP client of A's endpoint, `{root}/mcp`, signed in as this lane's own client. */
+  /** An MCP client of A's endpoint, `{root}/mcp`, signed in as this lane's own account. */
   client: McpClient;
   /** The lane's OAuth session, a browser of its own signing in by the Worker's client document. */
   session: OAuthSession;
@@ -57,9 +57,14 @@ export interface Lane extends Tier {
   token(): Promise<string>;
 }
 
-export function newLane(): Lane {
+/** A's two layouts of its timelines, which an instance takes from its name (D10). */
+export type Layout = 'shared' | 'split';
+export const LAYOUTS: readonly Layout[] = ['shared', 'split'];
+
+/** A test's own A, named `A-<suffix>` for the shared layout or `A-split-<suffix>` for the split one. */
+export function newLane(layout: Layout = 'shared'): Lane {
   const suffix = crypto.randomUUID().slice(0, 8);
-  const name = `A-${suffix}`;
+  const name = layout === 'split' ? `A-split-${suffix}` : `A-${suffix}`;
   const gateway = env.GATEWAY_INSTANCE;
   const laneEnv: Env = { ...env, SERVER_INSTANCE: name };
   lanes.set(name, laneEnv);

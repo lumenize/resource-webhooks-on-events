@@ -7,7 +7,7 @@ import { acceptPage, authorized, PAGE_TAG, report, type Control } from './back-c
 import { CLAIMS_HEADER, INSTANCE } from './edge';
 import { serveMcp } from './mcp-http';
 import { readCapped } from './read-capped';
-import { ServerRole, type ServerExtras } from './server-role/server-role';
+import { LAYOUTS, ServerRole, type ServerExtras } from './server-role/server-role';
 
 interface Claims {
   sub: string;
@@ -30,7 +30,16 @@ export class Server extends DurableObject<Env> {
     // The edge sends A only requests for its own instance, by name, so the name is present.
     const name = ctx.id.name!;
     this.#base = `/server/${name}`;
-    this.#role = new ServerRole({ extras: (new.target as typeof Server).extras });
+    this.#role = new ServerRole({
+      sql: ctx.storage.sql,
+      transactionSync: (fn) => ctx.storage.transactionSync(fn),
+      root: `${env.ORIGIN}${this.#base}`,
+      // An instance named `A-split…` keeps a timeline for tickets and one for notes, and any other
+      // one timeline for both (D10).
+      map: name.startsWith('A-split') ? LAYOUTS.split : LAYOUTS.shared,
+      cutoffWindowMs: Number(env.CUTOFF_WINDOW_MS),
+      extras: (new.target as typeof Server).extras,
+    });
     const sockets = `${env.ORIGIN}/gateway/${env.GATEWAY_INSTANCE}/ws/`;
     this.#authorization = new AuthorizationServer({
       sql: ctx.storage.sql,
@@ -93,6 +102,7 @@ export class Server extends DurableObject<Env> {
       return;
     }
     if (control.action === 'wipe') {
+      this.#role.wipe();
       this.#authorization.clear();
       const wipes = this.#wipes() + 1;
       this.ctx.storage.kv.put('wipes', wipes);
@@ -117,13 +127,14 @@ export class Server extends DurableObject<Env> {
   async #clientDocument(url: string): Promise<unknown> {
     if (url === clientMetadataUrl(this.env.ORIGIN)) return clientMetadataDocument(this.env.ORIGIN);
     let response: Response;
+    let bytes: Uint8Array | undefined;
     try {
       response = await fetch(url, { headers: { Accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(Number(this.env.ATTEMPT_TIMEOUT_MS)) });
+      bytes = await readCapped(response.body, MAX_DOCUMENT_BYTES);
     } catch (error) {
       report(this.ctx, 'A', { kind: 'document', url, failure: (error as Error).name === 'TimeoutError' ? 'timeout' : 'connection_refused' });
       return undefined;
     }
-    const bytes = await readCapped(response.body, MAX_DOCUMENT_BYTES);
     const text = bytes ? new TextDecoder().decode(bytes) : '';
     // Cloudflare answers some fetches with a page of its own naming an error code, as 1016 when
     // its resolver gives no address.
@@ -140,7 +151,8 @@ export class Server extends DurableObject<Env> {
   }
 
   // How many Wipes A has had. A token, a code and an account cookie carry the count they were
-  // issued under, so a Wipe refuses every earlier one, and the account cap counts afresh.
+  // issued under, so a Wipe refuses every earlier one, and the account cap counts afresh. B never
+  // reads it, so a socket token from before a Wipe still opens a socket there.
   #wipes(): number {
     return (this.ctx.storage.kv.get('wipes') as number | undefined) ?? 0;
   }
