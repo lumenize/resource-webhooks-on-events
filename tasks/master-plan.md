@@ -413,7 +413,7 @@ Larry confirmed these on 2026-11-01:
 - **R1 to R24 but R6:** every rule gets a test, and a review hunts the edge cases beyond them, § *Less common cases, most likely first* included. R12 is tested on a refresh, on reconnecting to B, on starting, and on a `gap` envelope that a test signs and posts through B, which passes on every signed body but a verification.
 - **SEP-3415's machinery:** each MUST it covers stays tested, with the first flavor's tests.
 - **The strawman's methods:** the happy path and a conflicting write.
-- **Registration and the Wipe:** scaffolding, as far as the tests and the conformance suite's `auth/*` scenarios need. The anonymous account per browser gives each client its own principal, as SEP-3415's subscription key needs.
+- **Registration and the Wipe:** scaffolding, as far as the tests and the conformance suite's `auth/*` scenarios need, and closed against the holes that moving to documents opens, as Phase 2 lists (amended on 2026-11-03). The anonymous account per browser gives each client its own principal, as SEP-3415's subscription key needs.
 - **Designed, not built:** several writers minting moments (R6), subscriptions granted no expiry, R12's trigger on a `subscriptions/listen` stream and the `deliveryStatus` its sub-bullet cites, uriGlob, access that differs by resource (Q6), and a restore from a real backup, whose steps the Wipe takes in the tests (R21).
 
 ## Open questions
@@ -506,12 +506,13 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - **B tags each socket with the token's `sub` and the instance,** as design item 4 says, and supersedes a socket only for the same `sub` and instance, since the socket's path, `/gateway/B/ws/<instance>`, no longer names the `sub` that `socketGuard` checked.
 - **The account cookie is `HttpOnly; Secure; SameSite=Strict`, with its `Path` set to the authorize endpoint's,** and carries the Wipe count, so a cookie from before a Wipe counts as no cookie. Each code carries the Wipe count too, and the token endpoint refuses a code from before the last Wipe with `invalid_grant`.
 - **A fetches a client ID metadata document as it sends a delivery,** with `redirect: 'manual'` and `ATTEMPT_TIMEOUT_MS`, and takes any `3xx` as an invalid document. It reports each fetch's outcome on its back channel, with Cloudflare's error code as `send` parses it.
+- **A refuses a document whose `redirect_uris` aren't all on the Worker's origin or loopback,** as the first flavor's `register` refused such a redirect URI, so a code never goes to another site.
 - **The registration cap is one mechanism,** a count of accounts keyed by the Wipe count, and the Wipe no longer clears it.
 
 **Success criteria (capable of failing).**
 
 - A's authorization server metadata has `client_id_metadata_document_supported: true` and no `registration_endpoint`, and the Worker serves the client's own document, whose `client_id` equals its URL on the Worker's origin, in the lane too.
-- A refuses an authorization request whose document's `client_id` differs from the document's URL, one whose `redirect_uri` the document doesn't list, and one whose document answers `302`, each in a test of its own, and accepts a request that matches. The token endpoint takes a public client, with PKCE and no secret.
+- A refuses an authorization request whose document's `client_id` differs from the document's URL, one whose `redirect_uri` the document doesn't list, one whose document answers `302`, and one whose document lists a redirect URI off the Worker's origin and loopback, each in a test of its own, and accepts a request that matches. The token endpoint takes a public client, with PKCE and no secret.
 - Two grants from one browser, the test client keeping A's cookie between them, bring back the same `sub`. A grant without the cookie, or with one from before a Wipe, brings a new one, which counts toward the cap. The first grant's `Set-Cookie` has `SameSite=Strict`, `HttpOnly`, `Secure` and the authorize path.
 - A code issued before a Wipe gets `invalid_grant` after it.
 - After `REGISTRATION_CAP` new accounts since a Wipe, the next is refused, and after a Wipe one more is accepted.
@@ -519,7 +520,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - The client falls back to DCR against metadata that advertises no document support.
 - The client suite's `auth/basic-cimd:cimd-client-id-used` passes and leaves `conformance-baseline.yml`.
 
-**Mutation notes.** Each criterion has its own: dropping the `client_id` comparison, dropping the `redirect_uri` check, following the redirect, minting a new account on every grant, `SameSite=Lax`, accepting a pre-Wipe cookie or code, dropping the cap's Wipe key, tagging B's socket by the instance alone, leaving out the DCR fallback, and advertising `registration_endpoint` or serving no document.
+**Mutation notes.** Each criterion has its own: dropping the `client_id` comparison, dropping the `redirect_uri` check, following the redirect, accepting an off-origin redirect URI, minting a new account on every grant, `SameSite=Lax`, accepting a pre-Wipe cookie or code, dropping the cap's Wipe key, tagging B's socket by the instance alone, leaving out the DCR fallback, and advertising `registration_endpoint` or serving no document.
 
 ### Phase 3: Every write lands at a moment on its timeline
 
@@ -657,7 +658,6 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 Writing and reviewing the phases named a few things the proposal and § *Decisions* don't, and these are his:
 
 - **New names:** the ticket fields `duplicateOf` and `duplicates`, the instance prefix `A-split`, and `scripts/check-deploy-bundle.mjs`, which § *Current state* now carries under that name.
-- **Phase 2's hardening,** which goes past "scaffolding, as far as the tests and the conformance suite's `auth/*` scenarios need": the cookie's attributes, the Wipe count in cookies and codes, the document fetch's redirect rule, and the SSRF pins for it.
 
 ## Non-goals
 
