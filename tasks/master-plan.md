@@ -103,7 +103,7 @@ Each client now holds every ticket, and is caught up to `"107"`, the read's `nex
 | ticket-3 | `"101"`, open | **`"101"`, open** | **`"101"`, open** |
 | ticket-7 and ticket-9 | `"107"` | **`"107"`** | **`"107"`** |
 
-- **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its revision in `_meta` (R7), and `nextFrom`, the timeline's latest moment, which the server reads before the first page's resources. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. Every page repeats the first page's `nextFrom`, which the cursor carries. A resource that doesn't change while the client pages MUST come exactly once. The client catches up from `nextFrom` afterwards, which brings whatever changed while it paged, deletions included. The read never answers `momentExpired` or `momentTooLarge`, and its result is a core `CacheableResult`.
+- **R22.** `resources/collection/read` names a uri-specification as a catch-up does, gets the same errors for it, and is authorized the same way (R13), but takes no `from`. It returns the contents of each resource in the collection, each item as `resources/read` returns it, with its revision in `_meta` (R7), and `nextFrom`, the timeline's latest moment, which the server reads before the first page's resources. A long result comes in pages, as core's `resources/list` does: the server returns an opaque `nextCursor`, and the client sends it back as `cursor`. Every page repeats the first page's `nextFrom`, which the cursor carries. A resource that doesn't change while the client pages MUST come exactly once. The client catches up from `nextFrom` afterwards, which brings whatever changed while it paged, deletions included. The read never answers `momentExpired` or `momentTooLarge`, and its result is a core `CacheableResult`. [If the uri-specificatoin is not a collection but rather a single uri, this method name could be confusing. Should we consider changing it and making "uri-specification" be the word, so `resources/uri-specification/read`? If we do, we should also change `resources/catchup` to `resources/uri-specification/catchup`. This gives us a namespace for this work. I can imagine adding another method `resources/uri-specification/subscribe` that does steps 1, 2, and 3 all in one shot]
 - **R8.** A client keeps, for each uri-specification it catches up on, the moment it is caught up to, and each copy's revision. A client that catches up on a template and on a uri it covers (D9) is caught up on the uri to at least each `nextFrom` it receives for the template.
 
 #### Step 2, at `"107"`: X and Y subscribe
@@ -124,17 +124,13 @@ A now holds a subscription for each client, and nothing else changes.
 
 #### Step 3, at `"107"`: X and Y catch up
 
-Each client catches up from `"107"`, which brings any change made before its subscription took hold. Here there is none, so nothing changes.
+Each client catches up from `"107"`, since a change made after its read and before its subscription took hold sends it no event. Here there is none, so the result is empty and nothing changes. Had a ticket changed in that gap, it would come here, as ticket-3's change does in step 6.
 
 ```jsonc
 {"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
   "from": "107", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [], "hasMore": false, "nextFrom": "107"}
 ```
-
-- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the moment the client is caught up to as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. A catch-up's `changes` MUST hold every covered resource changed after `from` and at or before its `nextFrom`, as it stood at `nextFrom`, a deleted one as a tombstone, so a resource missing from them did not change in that span. With `hasMore` false, its `nextFrom` is no earlier than any moment the server had sent when it was read. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
-  - A uri-specification on a timeline gets the timeline's latest moment as its `nextFrom` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither. A catch-up with no `from` gets `InvalidParams` too.
-  - A server meets the MUST by reading the timeline's latest moment before the resources, from one store, not from a lagging replica.
 
 #### Step 4, at `"108"`: Y closes ticket-3
 
@@ -193,11 +189,16 @@ X's copy is at `"101"`, the patch's `previousRevision`, so X applies it (R19), a
 | ticket-3 | `"108"`, closed | **`"108"`, closed** | `"108"`, closed |
 | ticket-7 and ticket-9 | `"107"` | `"107"` | `"107"` |
 
-- **R11.** When a client receives that event, it MUST catch up, unless it already holds that uri, or its tombstone, at that moment or later, which lets the writer skip its own change.
+- **R11.** When a client receives an `mcp.resource.updated` event, it MUST catch up, unless it already holds the event's uri, or its tombstone, at the event's `revision` or later, which lets the writer skip its own change.
+- **R13.** A catch-up names a uri-specification, as `uri` or `uriTemplate`, the moment the client is caught up to as `from`, and any patch formats it applies as `patchMimeTypes`. It stores nothing, needs no subscription (D3), and is authorized as a `resources/read` of each covered resource. A client subscribed to a template names the template, even when the event named one uri in it. A catch-up's `changes` MUST hold every covered resource changed after `from` and at or before its `nextFrom`, as it stood at `nextFrom`, a deleted one as a tombstone, so a resource missing from them did not change in that span. With `hasMore` false, its `nextFrom` is no earlier than any moment the server had sent when it was read. The result is a core `CacheableResult`, and a client that polls waits its `ttlMs` (D12).
+  - A uri-specification on a timeline gets the timeline's latest moment as its `nextFrom` before any resource it covers exists. One the server neither lists nor covers gets `InvalidParams` (`-32602`) with `data.reason` `"notFound"`, as does naming both `uri` and `uriTemplate`, or neither. A catch-up with no `from` gets `InvalidParams` too.
+  - A server meets the MUST by reading the timeline's latest moment before the resources, from one store, not from a lagging replica.
 
 ### Timelines and moments
 
-A timeline's scope is the server's choice. In the first example, each uri-specification has a timeline of its own. The happy path started here:
+A timeline's scope is the server's choice. Each of the two examples below serves tickets and notes, and the prototype runs both (D10).
+
+In the first example below, `tickets/{id}` and `notes/{id}` each have a timeline of their own. The happy path starts from this one, at `"107"`:
 
 ```yaml
 listed:                       # uri-specifications MAY point to separate timelines
@@ -209,14 +210,14 @@ timelines:
     resources:                # each one's revision, the moment it last changed
       tickets/ticket-3: "101"
       tickets/ticket-7: "107" # closing ticket-7 as a duplicate of ticket-9
-      tickets/ticket-9: "107" #   changed both at once, so they share a moment
+      tickets/ticket-9: "107" #   changed both in one transaction
   notes:
     latest: "042"
     resources:
       notes/plan: "042"
 ```
 
-In the second, closing a ticket also closes its note, in one atomic step, so the two share a timeline:
+In the second example below, closing a ticket also closes its note, in one transaction, so tickets and notes share a timeline:
 
 ```yaml
 listed:
@@ -227,80 +228,26 @@ timelines:
     latest: "108"
     resources:
       tickets/ticket-3: "101"
-      tickets/ticket-9: "108" # ticket-9 and its note closed in one step
+      tickets/ticket-9: "108" # ticket-9 and its note closed in one transaction
       notes/ticket-9: "108"
 ```
 
-- **R1.** A server keeps one or more timelines, from one for everything it serves to one for each uri-specification it lists. Every resource a uri-specification covers is on that uri-specification's timeline, so uri-specifications whose resources overlap MUST share one, and each resource is on exactly one timeline. Example: `tickets/{id}` and `{kind}/ticket-3` both cover `tickets/ticket-3`, so they share a timeline though neither contains the other. A server assigns timelines over every uri-specification it may ever list to anyone, since listings change and differ by who asks.
+- **R1.** A server keeps one or more timelines, from one for everything it serves to one for each uri-specification it lists. Every resource a uri-specification covers is on that uri-specification's timeline, so uri-specifications that cover a resource in common MUST share one, and each resource is on exactly one timeline. Example: `tickets/{id}` and `{kind}/ticket-3` both cover `tickets/ticket-3`, so they share a timeline though neither contains the other. A server assigns timelines over every uri-specification it may ever list to anyone, since listings change and differ by who asks.
 - **R2.** Every change to a resource, its creation and deletion included, happens at a new moment on its timeline, which becomes the timeline's latest moment and the resource's revision.
 - **R3.** Moments on a timeline MUST strictly increase in byte order: ULIDs, or a counter zero-padded to a fixed width, but ISO timestamps only at a precision finer than the time between any two changes.
   - Kubernetes works the same way: an object's `resourceVersion` is etcd's revision at its last change, a client watches a collection for changes after one, and an update fails if it has moved on. [KEP-5504](https://www.kubernetes.dev/resources/keps/5504/), stable in v1.35, made them orderable within one resource type, as moments are within one timeline, where clients had compared them only for equality, as ETags compare.
-- **R4.** A change that touches several resources in one atomic step gives them one moment, so resources that can change together share a timeline.
-- **R5.** Changes on a timeline MUST commit in the order of their moments, so once a client has seen a moment, no change at or before it can still appear: SEP-3415's "safe-to-persist watermark", held by a timeline instead of a subscription. A server checks that each new moment is later than the timeline's latest one, and commits, in one atomic step: in a Durable Object, with nothing awaited between; in Postgres at read committed, with `UPDATE timelines SET latest = $new WHERE id = $timeline AND latest < $new` in byte order (`COLLATE "C"`), minting again when no row changes. A timeline per server serializes all its writes, and one per uri-specification only that one's.
+- **R4.** A change that touches several resources in one transaction gives them one moment, so resources that can change together share a timeline.
+- **R5.** Changes on a timeline MUST commit in the order of their moments, so once a client has seen a moment, no change at or before it can still appear: SEP-3415's "safe-to-persist watermark", held by a timeline instead of a subscription. A server checks that each new moment is later than the timeline's latest one, and commits, in one transaction: in a Durable Object, with nothing awaited between; in Postgres at read committed, with `UPDATE timelines SET latest = $new WHERE id = $timeline AND latest < $new` in byte order (`COLLATE "C"`), minting again when no row changes. A timeline per server serializes all its writes, and one per uri-specification only that one's.
 - **R6.** A server SHOULD mint each moment as the later of a fresh one and the one just after the timeline's latest moment, so R5's check rejects one only when another writer got there first. A Durable Object seeds its ULID library's monotonic mode from the stored latest moment, since that mode forgets its last ULID on a restart.
 - **R7.** Each of a resource's revisions, in the strawman's sense, MUST be the moment of that change, so `ifMatch` checks the latest, and this extension's clients may also order revisions. The prototype builds the strawman's `resources/stat`, `resources/create`, `resources/update` and `resources/delete` as a second strawman. Every change-set entry in a write's result carries `revision`, a deletion's included. A `resources/read` result MUST carry each item's revision in `_meta`, under the strawman's provisional key, `io.modelcontextprotocol/resource-revision`.
 
-### A catch-up that stops short
+### What a catch-up brings
 
-```jsonc
-// X is caught up to "100" on tickets/{id}. X holds ticket-3 at "095" and
-// ticket-5 at "090". After "100", before X asks:
-//   "101"  ticket-4 created
-//   "102"  ticket-5 updated
-//   "103"  ticket-3 updated
-//   "104"  ticket-5 updated again: two changes to one resource
-//   "105"  ticket-6 created
-// A sends at most two entries in a catch-up.
-
-// Catch-up 1.
-{"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
-  "from": "100", "patchMimeTypes": ["application/merge-patch+json"]}}
-{"changes": [
-  {"uri": "tickets/ticket-4", "effect": "created", "revision": "101",
-   "contents": {...}},
-  {"uri": "tickets/ticket-5", "effect": "updated",
-   "previousRevision": "090", "revision": "102",    // as of "102", not "104"
-   "patchMimeType": "application/merge-patch+json", "patch": {...}}],
- "hasMore": true, "nextFrom": "102"}
-// A stopped at "102", so it brings each ticket as it stood then, though
-// ticket-5 has changed since. X applies it, and is caught up to "102".
-
-// Meanwhile ticket-3 changes again, at "106".
-
-// Catch-up 2 is an ordinary catch-up from "102".
-{"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
-  "from": "102", "patchMimeTypes": ["application/merge-patch+json"]}}
-{"changes": [
-  {"uri": "tickets/ticket-3", "effect": "updated",
-   "previousRevision": "095", "revision": "103",
-   "patchMimeType": "application/merge-patch+json", "patch": {...}},
-  {"uri": "tickets/ticket-5", "effect": "updated",
-   "previousRevision": "102", "revision": "104",
-   "patchMimeType": "application/merge-patch+json", "patch": {...}}],
- "hasMore": true, "nextFrom": "104"}
-// X holds ticket-5 at "102" from catch-up 1, so X applies the patch.
-// X is caught up to "104".
-
-// Catch-up 3.
-{"method": "resources/catchup", "params": {"uriTemplate": "tickets/{id}",
-  "from": "104", "patchMimeTypes": ["application/merge-patch+json"]}}
-{"changes": [
-  {"uri": "tickets/ticket-6", "effect": "created", "revision": "105",
-   "contents": {...}},
-  {"uri": "tickets/ticket-3", "effect": "updated",
-   "previousRevision": "103", "revision": "106",
-   "patchMimeType": "application/merge-patch+json", "patch": {...}}],
- "hasMore": false, "nextFrom": "106"}
-// X holds ticket-3 at "103" from catch-up 2, so X applies the patch.
-// X is caught up to "106" on tickets/{id}.
-```
-
-- **R14.** A server may stop a catch-up short of the timeline's latest moment, to keep its result small. Its `nextFrom` is then where it stopped, never partway through one moment's changes, and `hasMore` is true, as in SEP-3415's poll mode. It may stop short with no changes, as after scanning many changes to another collection on a shared timeline. The client applies the changes, and is caught up to `nextFrom`. While `hasMore` is true, it catches up again at once, without waiting `ttlMs`, as SEP-3415's poll mode ignores `nextPollMs`. A catch-up may run past the server's usual size to finish a moment. A server that can't send one moment's changes in a single result answers `InvalidParams` (`-32602`) with `data.reason` `"momentTooLarge"`, and the client starts over (R23), since a collection read pages freely and the catch-up after it starts past that moment.
-  - Each catch-up leaves the client's copies as they stood at its `nextFrom`, so the next one's patches start where the copies are, as a read replica's do (§ *The design*).
-  - A resource changed on both sides of a catch-up's `nextFrom` comes in that catch-up and the next, as ticket-5 does, so its `contents`, when sent, travel more than once. A catch-up that reaches the timeline's latest moment brings each resource once, at its revision.
-  - Kubernetes reads every page of a list from one snapshot, so its `continue` token expires, after five minutes by default. A catch-up that stops short needs no snapshot, since the next is an ordinary catch-up, which expires only as any `from` does (R21).
 - **R19.** Each entry in `changes` is one resource's change from `from` to the catch-up's `nextFrom` (R13): the strawman's change-set entry, with contents added. `previousRevision` is the resource's revision at `from`, absent if it did not exist then. `effect` is `deleted` if the change ends with the resource gone, else `created` if it did not exist at `from`, else `updated`. A non-deletion carries `contents`, one `TextResourceContents` or `BlobResourceContents`, or a `patch` from the contents at `previousRevision`, with its `patchMimeType`, in a listed format that applies. A merge patch ([RFC 7396](https://www.rfc-editor.org/rfc/rfc7396)) applies to one `application/json` text entry, and patches its parsed `text`. JSON-based patches travel as JSON, others as strings. The server sends `contents` when no listed format applies, when there is no `previousRevision`, or when it no longer keeps those contents, and MAY when `contents` is smaller.
   - A client applies a patch only to a copy at its `previousRevision`, and otherwise reads the resource (D2). If that read fails, or returns a revision earlier than the entry's, the client stays caught up to its `from`, and catches up again.
+- **R14.** A server may stop a catch-up short of the timeline's latest moment, to keep its result small. Its `nextFrom` is then where it stopped, never partway through one moment's changes, and `hasMore` is true, as in SEP-3415's poll mode. It may stop short with no changes, as after scanning many changes to another collection on a shared timeline. The client applies the changes, and is caught up to `nextFrom`. While `hasMore` is true, it catches up again at once, without waiting `ttlMs`, as SEP-3415's poll mode ignores `nextPollMs`. A catch-up may run past the server's usual size to finish a moment. A server that can't send one moment's changes in a single result answers `InvalidParams` (`-32602`) with `data.reason` `"momentTooLarge"`, and the client starts over (R23), since a collection read pages freely and the catch-up after it starts past that moment.
+  - Each catch-up leaves the client's copies as they stood at its `nextFrom`, so the next one's patches start where the copies are, as a read replica's do (§ *The design*). Example: X is caught up to `"100"` and holds ticket-5 at `"090"`, and ticket-5 changes at `"102"` and again at `"104"`. A catch-up that stops at `"102"` brings ticket-5 as it stood then, with a patch from `"090"` to `"102"`, and the next brings a patch from `"102"` to `"104"`. Sent as `contents` instead, ticket-5 would travel twice. A catch-up that reaches the timeline's latest moment brings each resource once, at its revision.
+  - Kubernetes reads every page of a list from one snapshot, so its `continue` token expires, after five minutes by default. A catch-up that stops short needs no snapshot, since the next is an ordinary catch-up, which expires only as any `from` does (R21).
 
 ### Less common cases, most likely first
 
@@ -362,6 +309,12 @@ A uriGlob is a third kind of uri-specification, for a collection a uriTemplate d
 
 A uriTemplate falls short because RFC 6570 defines how a template expands, not how a URI matches one: the first flavor's matcher took `{+name}` as one or more characters, so `inbox/{+path}/note-{id}` misses `inbox/note-1`, which `inbox/**/note-*` matches.
 
+## References
+
+- **SEP-3415, Events**, [modelcontextprotocol#3415](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415), a draft: `events/subscribe`, webhook delivery, and the `mcp.resource.updated` event its Open Question 2 sketches.
+- **The Filesystems working group's strawman**, [experimental-ext-filesystems#2](https://github.com/modelcontextprotocol/experimental-ext-filesystems/pull/2), a draft: `revision`, `ifMatch`, the change-set entry, and the four write methods the prototype builds.
+- **MCP 2026-07-28**, [the specification](https://modelcontextprotocol.io/specification/2026-07-28), the revision this extension builds on: `resources/read`, pagination, and `CacheableResult`.
+
 ---
 
 *The proposal ends here. The rest is the task file, which stays when the proposal is split out. Its Open questions and Decisions serve both.*
@@ -392,7 +345,7 @@ What this task adds, in build order:
 
 1. Registration by Client ID Metadata Document, since every request over MCP needs a token.
 2. Timelines and moments, R1 to R5, with one counter for each timeline, which meets R6 trivially.
-3. The strawman's four methods (R7, R17). Closing a ticket also closes its note, and closing ticket-7 as a duplicate of ticket-9 also records it on ticket-9, each in one change, so R4 and R14 are tested through real writes.
+3. The strawman's four methods (R7, R17). Closing a ticket also closes its note, and closing ticket-7 as a duplicate of ticket-9 also records it on ticket-9, each in one transaction, so R4 and R14 are tested through real writes.
 4. The extension's declaration and the event (R10, R20), with no `subscriptions/listen` stream.
 5. Reading a collection, subscribing, and catching up, including catch-ups that stop short (R13, R14, R18, R19, R21, R22, R23).
 6. The client's rules (R8, R9, R11, R12, R15, R16).
@@ -431,7 +384,7 @@ IDs follow the order the decisions were recorded, not the order shown, and a gap
 | D3 | A catch-up needs no subscription (R13), so clients that poll or listen on a stream can use it. (Larry, 2026-10-31) | Naming a subscription so a lost one gets `NotFound`, which shuts those clients out. |
 | D4 | A `from` too old gets `momentExpired`, and the client starts over (R21), as Kubernetes answers with `410 Gone` and core an expired cursor with `-32602`. (Claude, 2026-10-31; Larry confirmed, 2026-11-01) | A flag with the whole current state, or SEP-3415's `truncated: true`, either of which a client could miss and keep deleted copies. |
 | D5 | Events carry no contents (R10), so a lost, repeated or late one does no harm. A change then costs a subscriber an event and a catch-up, one round trip more than a delivery carrying the change, with about the same bytes. The writer pays nothing extra, and N changes before a catch-up cost N events and one catch-up. (Larry, 2026-10-31) | The first flavor's `full` and `patch` deliveries, which needed `fromVersion` and a resubscribe that drops queued deliveries (its R58). |
-| D6 | Moments are ordered (R3, R5), so one string serves as version, revision and the moment a client is caught up to, at the cost of R5's atomic step on each timeline. (Larry, 2026-10-31) | The first flavor's versions, compared only for equality, as ETags are, which needed `fromVersion` to order deliveries. |
+| D6 | Moments are ordered (R3, R5), so one string serves as version, revision and the moment a client is caught up to, at the cost of serializing each timeline's writes. (Larry, 2026-10-31) | The first flavor's versions, compared only for equality, as ETags are, which needed `fromVersion` to order deliveries. |
 | D7 | Writes are the strawman's four methods (R7, R17), so a writer's reply carries the revision. (Larry, 2026-10-31) | The first flavor's writes outside MCP, where each server decided who made a version. |
 | D8 | Plain HTTP access is left out, since nothing here rests on HTTP's `ETag`. (Larry, 2026-10-31) | The first flavor's HTTP, which argued for the equality-only versions D6 replaces. |
 | D9 | **(was Q2)** A server may list a uri that a template it lists covers, on the template's timeline (R1). (Larry, 2026-11-01) | Listings that never overlap, which would stop a common practice for nothing. |
