@@ -1,0 +1,47 @@
+// The rule-coverage check `npm test` runs after the suite, given reports written by hand: it
+// passes only when every rule from R1 to R24 but R6 is named before the first colon of a passing
+// test's title.
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, it } from 'vitest';
+
+const SCRIPT = join(import.meta.dirname, '../../scripts/check-rule-coverage.mjs');
+let scratch: string | undefined;
+
+afterEach(() => {
+  if (scratch) rmSync(scratch, { recursive: true, force: true });
+  scratch = undefined;
+});
+
+function check(tests: { title: string; status: string }[]): { exitCode: number; output: string } {
+  scratch = mkdtempSync(join(tmpdir(), 'rule-coverage-'));
+  const file = join(scratch, 'report.json');
+  writeFileSync(file, JSON.stringify({ testResults: [{ assertionResults: tests }] }));
+  try {
+    return { exitCode: 0, output: execFileSync(process.execPath, [SCRIPT, file], { encoding: 'utf-8', stdio: 'pipe' }) };
+  } catch (error) {
+    const { status, stderr } = error as { status: number; stderr: string };
+    return { exitCode: status, output: stderr };
+  }
+}
+
+const every = (except: number[] = []) =>
+  Array.from({ length: 24 }, (_, index) => index + 1)
+    .filter((rule) => rule !== 6 && !except.includes(rule))
+    .map((rule) => ({ title: `R${rule}: a test of it`, status: 'passed' }));
+
+it('passes when every rule but R6 is named by a passing test', () => {
+  expect(check(every())).toMatchObject({ exitCode: 0 });
+});
+
+it('fails naming a rule no passing test names, as R17 once left out', () => {
+  expect(check(every([17]))).toEqual({ exitCode: 1, output: expect.stringContaining('No passing test names R17') });
+});
+
+it('counts neither a failing test, nor an R number after the colon, nor a title with none', () => {
+  const tests = [...every([17]), { title: 'R17: a failing test', status: 'failed' }, { title: 'a test: of R17, after the colon', status: 'passed' }, { title: 'R17 with no colon', status: 'passed' }];
+  expect(check(tests)).toMatchObject({ exitCode: 1 });
+  expect(check([...every([17]), { title: "R17's case: a test of it", status: 'passed' }])).toMatchObject({ exitCode: 0 });
+});

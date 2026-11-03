@@ -982,6 +982,32 @@ Choices the phase made where the task file left one open:
 
 **Close-out.** The suite is 443 tests in 34 files, all passing, three of them Phase 8's rule-coverage tests, which the closing run included. Both conformance suites pass. `build-checks.test.ts` lists `src/client/copies.ts` among the modules Node loads with types stripped, as Phase 1 left for this phase.
 
+### Phase 8
+
+**For Larry.** Nothing needs a decision. New in code: `scripts/check-rule-coverage.mjs`, and `results/test-results.json`, which `npm test` now writes into the gitignored `results/` before the check reads it. The deployed tier's files are `test/deployed/events.test.ts`, `acknowledgement.test.ts` and `ssrf.test.ts`.
+
+Choices the phase made where the task file left one open:
+
+- "Its first run leaves out one rule that no comment mentions, to show it fails" is a harness test, `rule-coverage.test.ts`, which runs the check on a report written by hand with R17 left out, and on one where R17's only mention comes after the colon, from a failing test, or in a title with no colon.
+- The happy path on A is the events scenario, which gained the close of step 4 and the patched catch-up of step 6, so it runs in the lane too.
+- The document SSRF test's public URL that redirects to a private one is postman-echo.com's `/redirect-to`, so the test leans on postman-echo.com being up.
+- `left-behind.test.ts` now also scans for `resources/webhooks/` and `'mcp.resource.updated'`. Run against the first flavor's tree with `SCAN_ROOT`, it finds both, in eleven files for the second.
+
+**Retro.**
+
+- The deploy took 3 s to reach A and B, since nothing ran the previous version.
+- A's document fetch met the same Cloudflare error codes as its webhook POSTs, on 2026-11-03: 1016 for every name that resolves to a private, loopback, link-local or unspecified address, 1002 for the other special-purpose ranges, 1003 for a bare address or `localhost`, and 526 for the reached control. So design item 5, that the document fetch needs no SSRF check of A's own, holds as measured. `results/ssrf-document-outcomes.json` keeps the run.
+- httpbin.org answers a Worker's fetch with a 403 of its own, so the redirect case first tested nothing. postman-echo.com redirects, and A reported its 302 and fetched nothing after it.
+- The scenario checked B's report of the event as soon as the event reached `b`. On Cloudflare, the report can reach the page after the event, so the scenario now waits for it. The lane never showed the race.
+
+**Mutation checks:**
+
+- With R17's only test renamed, all 443 tests pass, and the coverage check fails naming R17.
+- With `CONFORMANCE` set in `wrangler.jsonc`, `build-checks.test.ts`'s config test and its bundle test both go red.
+- A webhook URL or document at `10.0.0.1` reaching its receiver can't be made locally, since Cloudflare's egress decides it. The SSRF tests pin each code, so an address that reached its receiver would answer with another.
+
+**Close-out.** The suite is 443 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test. Both conformance suites pass, and the deployed tier passes its four tests on `test-resource-webhooks-on-events`. `src/` holds no `resources/webhooks/` method, no `'mcp.resource.updated'`, no `targets.ts` and no `notes-http.ts`.
+
 ## Notes kept out of the proposal
 
 Larry's notes, which stay in this file when the proposal is split out of it.

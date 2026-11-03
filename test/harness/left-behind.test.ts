@@ -21,6 +21,9 @@ const LEFT_BEHIND: Record<string, RegExp> = {
   './public': /\.\/public|"directory": "public"|public\/js/,
   playwright: /["']playwright["']|node_modules\/playwright/,
   'the notes and lists routes': /\(notes\|lists\)|\/notes\/inbox|\/lists\/list-/,
+  // What the design replaced: the first flavor's methods, and SEP-3415's sketched event.
+  'resources/webhooks/': /resources\/webhooks\//,
+  "'mcp.resource.updated'": /['"`]mcp\.resource\.updated['"`]/,
 };
 
 function filesUnder(directory: string): string[] {
