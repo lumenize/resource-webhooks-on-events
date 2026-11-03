@@ -82,7 +82,7 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 | latest moment | A timeline's most recent moment. A server stores it, and mints each new moment later than it (R5). | `"107"`, for `tickets` below |
 | revision | A moment at which a resource changed, which the Filesystems strawman's fields `revision` and `previousRevision` hold. A resource's revision, with nothing more said, is its latest, as `resources/stat` and `resources/read` report it (R7). | ticket-3's `"101"`, and `"108"` from step 4 |
 | tombstone | What a deleted resource leaves: its uri and the moment it was deleted. | ticket-3, deleted at `"111"` |
-| copy | The contents a client last received for a resource, with the resource's revision then. | ticket-3's JSON at `"101"` |
+| copy | The contents a client last received or wrote for a resource, with the resource's revision then. | ticket-3's JSON at `"101"` |
 | catch-up | A `resources/collection/catchup` call and its result: every change to a uri-specification after the moment the client is caught up to, up to the result's `nextFrom`. A client is caught up to the last `nextFrom` it applied in full, and holds every change at or before it. | steps 3 and 6 below |
 
 ### The happy path
@@ -277,7 +277,7 @@ A catch-up on `{type}/{id}` brings ticket-9 and its note as they stood at one mo
 // X's copy is at "109", not "101", so X reads ticket-3 with resources/read.
 ```
 
-- **R9.** A client that writes sets that copy's revision from the reply, and moves what it is caught up to only on a catch-up. Example: X is caught up to `"107"`. Y updates ticket-9 at `"108"`, then X updates ticket-3 at `"109"`. Had X counted itself caught up to `"109"`, it would never fetch ticket-9's change.
+- **R9.** A client that writes a resource makes what it sent its copy, at the revision the reply gives that resource (R17). It takes nothing else from the reply. The reply lists every resource the write changed, such as a note closed along with its ticket, but holds no contents for the others, so the client gets them from a catch-up. Nor does the reply move what the client is caught up to. Example: X is caught up to `"107"`. Y updates ticket-9 at `"108"`, then X updates ticket-3 at `"109"`. Had X counted itself caught up to `"109"`, it would never fetch ticket-9's change.
 
 **Messages that cross.**
 
