@@ -40,7 +40,7 @@ SEP-3415's Open Question 2 sketches a minimal implementation of resource subscri
 
 **MCP is getting webhooks.** SEP-3415's webhook delivery is the catalyst for this work. It gives an MCP server a way to reach a client that holds no connection open, and this extension takes it as it stands. Clients already accept these webhooks while SEP-3415 is still a draft. [ChatGPT](https://developers.openai.com/plugins/build/mcp-events) receives Events by webhook on protocol `2026-07-28`, and so do the MCP packages of Vercel's AI SDK, Mastra and TanStack AI, in versions released in October 2026, and OpenClaw's `mcp-events` plugin in its beta builds.
 
-**MCP now serves skills as resources.** [Skills over MCP](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2640-skills-extension.md), SEP-2640, is Final, so every host that adopts it reads resources, and may use a skill only while its files match the manifest it approved. Its group chose resources in part for "a subscription model for updates", as its [decision log](https://github.com/modelcontextprotocol/ext-skills/blob/main/docs/decisions.md) records, which since 2026-07-28 reaches a host only over an open `subscriptions/listen` stream.
+**MCP now serves skills as resources.** [Skills over MCP](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2640-skills-extension.md), SEP-2640, is Final, so every client that adopts it reads resources, and may use a skill only while its files match the manifest it approved. Its group chose resources in part for "a subscription model for updates", as its [decision log](https://github.com/modelcontextprotocol/ext-skills/blob/main/docs/decisions.md) records, which since 2026-07-28 reaches a client only over an open `subscriptions/listen` stream.
 
 ### What the working group's charter asks
 
@@ -51,7 +51,7 @@ The Tasks and Events working group's [charter](https://modelcontextprotocol.io/c
 - **A client behind a gateway.** A client on a laptop or in a browser has no URL a server can reach. In SEP-3415's forward-proxy deployment, it names its gateway's URL instead, and the gateway verifies each delivery and passes it on.
 - **A collection of documents.** A client subscribes to `https://notes.example/notes/{id}`, hears of each note created, edited or deleted, and catches up after a night away.
 - **A client that can't take webhooks.** A command-line client polls `resources/collection/catchup` for `https://notes.example/notes/{id}` as often as each result's `nextPollMs` asks: one request for the whole collection, with no changes when nothing changed.
-- **A skill served over MCP.** A host that loaded `skill://code-review/SKILL.md` subscribes to `skill://code-review/{+path}`, hears of each changed file, and can ask for approval again before the model next uses the skill.
+- **A skill served over MCP.** A client that loaded `skill://code-review/SKILL.md` subscribes to `skill://code-review/{+path}`, hears of each changed file, and can ask for approval again before the model next uses the skill.
 
 § *The design* answers the three problems in turn: a webhook needs no open stream, an event's moment tells a client whether it already holds the change, so it skips the events for every change its last catch-up brought, and one catch-up brings only what changed in a whole collection. § *Decisions* says why, against the alternatives.
 
@@ -74,6 +74,7 @@ Rules are numbered R1 and up across the sections below. Each keeps its ID when o
 | Term | Meaning | Example |
 |---|---|---|
 | server | An MCP server as its clients see it, at one endpoint, however many processes, replicas or database nodes serve it. | replicas sharing one database |
+| client | An MCP client, together with the application it runs in, which reads, subscribes, catches up and keeps copies. MCP's architecture calls that application the host, and this proposal says client throughout. | X and Y below |
 | uri-specification | A uri, a uriTemplate, or later a uriGlob (§ *uriGlob, later*). A server lists a uri in `resources/list` and a uriTemplate in `resources/templates/list`. | `tickets/{id}` |
 | collection | The resources a uri-specification covers. **A uri on its own is a collection of one.** | every ticket `tickets/{id}` covers, or `tickets/ticket-3` alone |
 | timeline | The server's ordered record of the changes to a set of resources. | `tickets` below |
@@ -298,26 +299,28 @@ A -> X   reply: ticket-3 at "109"              earlier than "111", so ignored
 - **R12.** A client SHOULD catch up on each uri-specification it subscribed to whenever it may have missed events: after each SEP-3415 refresh, on reconnecting to its gateway or a `subscriptions/listen` stream, on starting, and on a `gap` envelope. A subscription with no expiry still gets SEP-3415's occasional refresh.
   - A client can miss events without knowing, as a backend can when its webhook endpoint is down while the process holding its copies stays up. SEP-3415 retries each event, so a short outage loses none, and a missed event costs nothing once another event brings a catch-up, which brings every change after the moment the client is caught up to. A quiet collection stays stale at most until the next refresh, whose `deliveryStatus` says whether deliveries had been failing, so such a client sets its refresh interval to the staleness it can tolerate, even when granted no expiry.
 
-**A template the server doesn't list.** A host that loaded `skill://code-review/SKILL.md` wants only that skill's files, from a server that lists one template, `skill://{skill}/{+path}`, for all its skills. The host names `skill://code-review/{+path}`, and the server accepts it, since the listed template matches every uri the named one could. To check, the server writes the named template as a sample uri, with a stand-in for each expression, and matches the sample against the listed template as it would any uri:
+**A template the server doesn't list.** A client that loaded `skill://code-review/SKILL.md` also wants the skill's other files, such as `skill://code-review/scripts/lint.py`, from a server that lists one template, `skill://{skill}/{+path}`, for all its skills. The client subscribes to `skill://code-review/{+path}`, and the server accepts it, since the listed template matches every uri the client's could. To check, the server turns the client's template into a sample uri and matches it against the listed template, as this pseudo-code does:
 
 ```text
-covers(listed, named):
-  # Write the named template as a sample uri, one stand-in per expression.
-  sample = named, with each {name} replaced by SEG and each {+name} by ANY
-  # Match it as a uri, except that a stand-in matches only an expression:
-  # a literal never matches SEG or ANY, a {name} matches SEG but not ANY,
-  # since ANY may hold a slash, and a {+name} matches both.
-  return matches(listed, sample)
+covers(listed, clientTemplate):
+  1. Write clientTemplate as a sample uri, replacing each {name} with the
+     stand-in SEG and each {+name} with the stand-in ANY.
+  2. Match the sample against listed as you would any uri, except that:
+     - a literal in listed never matches a stand-in,
+     - a {name} in listed matches SEG but not ANY, since ANY may hold a slash,
+     - a {+name} in listed matches both.
+  3. If they match, listed covers clientTemplate. If not, the server
+     answers notFound.
 ```
 
-| Listed | Named | Sample | Matches? |
+| Listed | Named by the client | Sample | Matches? |
 |---|---|---|---|
 | `skill://{skill}/{+path}` | `skill://code-review/{+path}` | `skill://code-review/ANY` | Yes: `{skill}` matches `code-review`, and `{+path}` matches `ANY` |
 | `skill://{skill}/{+path}` | `skill://code-review/scripts/{+file}` | `skill://code-review/scripts/ANY` | Yes: `{skill}` matches `code-review`, and `{+path}` matches `scripts/ANY` |
 | `{type}/{id}` | `tickets/{id}` | `tickets/SEG` | Yes: `{type}` matches `tickets`, and `{id}` matches `SEG` |
 | `tickets/{id}` | `tickets/{+rest}` | `tickets/ANY` | No: `{id}` holds one path segment, but `ANY` may stand for several, such as `a/b`, so the server answers `notFound` |
 
-- **R24.** A client may name a uriTemplate the server doesn't list, as long as a template the server lists matches every uri the named one could. The named template then shares the listed one's timeline (R1). A server may check as the sketch above does, and answers `notFound` when it can't tell.
+- **R24.** A client may name a uriTemplate the server doesn't list, in a subscription, a catch-up or a collection read, as long as a template the server lists matches every uri the client's could. The client's template then shares the listed one's timeline (R1). A server may check as the pseudo-code and table above show, and answers `notFound` when it can't tell.
 
 **Starting over.** A client caught up to a moment too old (R21), or whose catch-up meets a moment too large for one result (R14), reads the collection again, as a new client does (R18).
 
@@ -450,7 +453,7 @@ IDs follow the order the decisions were recorded, not the order shown, and a gap
 | D17 | **(was Q3)** The vocabulary of § *Definitions*: moment, latest moment, revision and caught up to. "Moment" and "revision" name different things, so both stay. (Larry, 2026-11-02) | One word for a moment and a resource's revision, which would ask the strawman to rename its fields, and left "a resource's moment", "the timeline's moment" and "a client's moment" each meaning a different latest. "Current moment", since a timeline moves only when a change occurs. |
 | D18 | The extension's two methods share the prefix `resources/collection/`, which it reserves (R20), and a uri on its own is a collection of one (R22). (Larry, 2026-11-03) | `resources/uri-specification/read` and `resources/uri-specification/catchup`, which read like fetching the specification itself, as D14 says of `resources/template/read`, and would put a hyphenated term of our own on the wire, where no core segment is hyphenated. The two names alone under core's `resources/`, which reserved nothing for a later method. |
 | D19 | The extension sends an event of its own, `mcp.resource.collection.updated`, one for each change on each subscription covering a resource it touched. Its `data` names the subscription's uri-specification, and lists the change's entries that the subscription covers (R10, R11). It leaves `mcp.resource.updated` to SEP-3415's Open Question 2. A server may merge undelivered events, with `truncated` left false, as Peter agreed for replacing an event with a newer one. (Larry, 2026-11-03) | Peter's `mcp.resource.updated` with data of our own, which takes a name Open Question 2 may define otherwise, for core's `notifications/resources/updated`, whose `uri` names the changed resource. One event for each resource changed, which sends a change touching 500 tickets as 500 deliveries, 499 of them skipped after the first catch-up. An event naming only the uri-specification and the moment, which a writer could skip only by taking the whole moment as its own, wrong when its write also changed a resource whose contents it lacks, as closing a ticket closes its note. Leaving the uri-specification to the subscription `id` in `X-MCP-Subscription-Id`, which each client would map back to its subscription. |
-| D20 | A server accepts a uriTemplate it doesn't list when one it lists covers it, and MAY answer `notFound` for one it can't show is covered (R24). R24 sketches a check: write the named template as a sample uri, with a stand-in for each expression, and match it as any uri. It never wrongly accepts, and it handles a listed template with part of it filled in, as a skill or a type is. (Larry, 2026-11-03) | Listed templates only, which leaves a host that wants one skill, on a server listing `skill://{skill}/{+path}`, watching every skill, unless the server lists a template for each. An exact check, which must first settle what RFC 6570's expressions match, empty values and levels 3 and 4 included, then compare automata that can grow exponentially. |
+| D20 | A server accepts a uriTemplate it doesn't list when one it lists covers it, and MAY answer `notFound` for one it can't show is covered (R24). R24's pseudo-code checks it: write the client's template as a sample uri, with a stand-in for each expression, and match it as any uri. It never wrongly accepts, and it handles a listed template with part of it filled in, as a skill or a type is. (Larry, 2026-11-03) | Listed templates only, which leaves a client that wants one skill, on a server listing `skill://{skill}/{+path}`, watching every skill, unless the server lists a template for each. An exact check, which must first settle what RFC 6570's expressions match, empty values and levels 3 and 4 included, then compare automata that can grow exponentially. |
 
 ## Notes kept out of the proposal
 
