@@ -952,6 +952,36 @@ Residuals to know of:
 
 **Close-out.** The suite is 410 tests in 28 files, all passing, and both conformance suites pass. Phase 4's and Phase 5's verifier findings are fixed here, and Phase 2's residual on the error-code parse is closed.
 
+### Phase 7
+
+**For Larry.** Nothing needs a decision before Phase 8. New in code: the `Copies` class and its entry points, `watch`, `event`, `trigger`, `refresh`, `wrote` and `poll`, and the client's log, whose entries are `event`, `trigger`, `started over` and `read failed`. `PATCH_MIME_TYPES` names the one format the client applies. The test gate, `test/lane/gate.ts`, is a test helper.
+
+Choices the phase made where the task file left one open:
+
+- `wrote` takes the write's reply, its change-set entries, and keeps only the entry for the resource the client sent, so R9's rule is the client's and a test of it can fail inside `copies.ts`.
+- A catch-up whose changes the client can't apply in full leaves it caught up to its `from`, and the client catches up again at its next trigger or event rather than at once, so a read that keeps failing never loops.
+- Starting over reads the collection and runs the catch-ups after it, then drops each unnamed copy, as R23 says. It needs no new subscription, so `watch` alone subscribes, between its read and its catch-ups (R18).
+- R8 moves a narrower uri-specification forward whenever a wider one it watches catches up, using the server's own matcher for templates, which the client imports.
+- The lane now binds `SUBSCRIPTION_TTL_MS` to 30 s, below the 60 s `CUTOFF_WINDOW_MS`, as R21's SHOULD asks. Nothing else in the suite changed for it.
+
+**Retro.**
+
+- The first run failed four tests for one cause: `watch` caught up once before it subscribed, through the path a start-over takes, where R18 asks for read, subscribe, then catch up. The read and the catch-ups after it are now two steps.
+- R9's rule could not fail inside `copies.ts` while the caller chose the revision to keep, so `wrote` takes the reply's entries.
+- One mutation survived at first because of the test. The Wipe ended the client's token, so its first catch-up met a `401` and went again once it had signed in, and the gate counted the resend as the next catch-up. The hold meant for the start-over's catch-up took the expired one, and the write landed before the read. The test now signs in again after the Wipe. A gate counts every POST, a resend after a `401` included.
+- R11's test first had no case where a copy is later than an event's entry, so comparing with `===` survived on paper. It now holds two of the writer's events until both replies are in.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning its test red, on both layouts where the test runs on both:
+
+- R18's, for subscribing before reading. R11's, for catching up on every event, for comparing with `===`, and for ignoring tombstones. In `lane-body-limit`, for skipping an event with no `changes`.
+- R9's, for taking every entry of the reply. R15's, for taking the late reply. R16's, for letting runs overlap. R19's, for patching a copy at another revision.
+- R12's, for each trigger ignored on its own: starting, a refresh, reconnecting and a gap.
+- R21's, for not starting over on `momentExpired`. In `lane-moment-cap`, for not starting over on `momentTooLarge`.
+- R23's, for applying R15 to a read's pages, in the harness, for dropping every unnamed copy, and for dropping another collection's.
+- R8's, for moving only the uri-specification caught up. The polling test, for waiting while `hasMore` is true, and for polling with no floor.
+
+**Close-out.** The suite is 443 tests in 34 files, all passing, three of them Phase 8's rule-coverage tests, which the closing run included. Both conformance suites pass. `build-checks.test.ts` lists `src/client/copies.ts` among the modules Node loads with types stripped, as Phase 1 left for this phase.
+
 ## Notes kept out of the proposal
 
 Larry's notes, which stay in this file when the proposal is split out of it.

@@ -5,6 +5,9 @@ import { defineConfig } from 'vitest/config';
 const BINDINGS = {
   // A minute, so a test reaches the cut-off by moving the clock past it.
   CUTOFF_WINDOW_MS: '60000',
+  // Below the cut-off window, as R21's SHOULD asks, so a client catching up at each refresh never
+  // meets a moment too old.
+  SUBSCRIPTION_TTL_MS: '30000',
   // Small, so a test reaches the cap.
   REGISTRATION_CAP: '5',
   TOKEN_SIGNING_KEY: 'test-signing-key-for-the-vitest-plugin-lane-only',

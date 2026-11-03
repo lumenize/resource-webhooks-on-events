@@ -120,7 +120,7 @@ describe("A's and B's role modules", () => {
 describe('the client modules', () => {
   // scripts/conformance-client.mjs runs them in Node with their types stripped, which refuses
   // what only TypeScript compiles, such as a parameter property.
-  it.each(['src/client/mcp-client.ts', 'src/standard-webhooks.ts'])('%s loads in Node with its types stripped', (file) => {
+  it.each(['src/client/mcp-client.ts', 'src/client/copies.ts', 'src/standard-webhooks.ts'])('%s loads in Node with its types stripped', (file) => {
     const loaded = execFileSync(process.execPath, ['--input-type=module', '-e', `await import(${JSON.stringify(join(process.cwd(), file))}); console.log('loaded')`], { encoding: 'utf8' });
     expect(loaded.trim()).toBe('loaded');
   });
