@@ -657,7 +657,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 Writing and reviewing the phases named a few things the proposal and § *Decisions* don't, and these are his:
 
-- **New names:** the ticket fields `duplicateOf` and `duplicates`, the instance prefix `A-split`, and `scripts/check-deploy-bundle.mjs`, which § *Current state* now carries under that name.
+- **New names:** the ticket fields `duplicateOf` and `duplicates`, and `scripts/check-deploy-bundle.mjs`, which § *Current state* now carries under that name.
 
 ## Non-goals
 
