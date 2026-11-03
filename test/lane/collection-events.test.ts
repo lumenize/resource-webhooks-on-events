@@ -68,7 +68,9 @@ describe('what A declares', () => {
       payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, changes: [entry] }).valid,
       payload.validate({ uriTemplate: `${lane.root}/tickets/{id}` }).valid,
       payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, changes: [{ uri: entry.uri, effect: entry.effect }] }).valid,
-    ]).toEqual([true, true, false]);
+      payload.validate({ uri: entry.uri, uriTemplate: `${lane.root}/tickets/{id}`, changes: [entry] }).valid,
+      payload.validate({ changes: [entry] }).valid,
+    ]).toEqual([true, true, false, false, false]);
   });
 
   it('R20: refuses a subscribe naming a uriTemplate past 1 KiB, or a uri past 2 KiB, with InvalidParams', async () => {
@@ -94,6 +96,19 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     }
     const { revision } = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     for (const { events } of subscriptions) await vi.waitFor(() => expect(events().map(({ eventId }) => eventId)).toEqual([revision]));
+  });
+
+  it("R18: refuses arguments the event's inputSchema refuses, a subscribe and an unsubscribe alike, before any handshake", async () => {
+    const lane = newLane(layout);
+    const b = await signedIn(lane, 'b');
+    const endpoint = receiver({ deliveries: () => new Response(null, { status: 200 }) });
+    const uri = `${lane.root}/tickets/ticket-3`;
+    for (const args of [{ uri: 123 }, { uriTemplate: {} }, { uri, other: 1 }]) {
+      expect({ args, code: (await refusal(subscribe(b, args as never, endpoint.url(), newSecret()))).code }).toEqual({ args, code: -32602 });
+      const unsubscribed = b.client.request('events/unsubscribe', { name: EVENT, arguments: args, delivery: { url: endpoint.url() } });
+      expect({ args, code: (await refusal(unsubscribed)).code }).toEqual({ args, code: -32602 });
+    }
+    expect(endpoint.challenges()).toEqual([]);
   });
 
   it('R18: refuses a uri-specification a catch-up would refuse with the same notFound, naming it, and handshakes with no one', async () => {
@@ -129,14 +144,18 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const page = await watch(lane, 'A');
     const tickets = await receiving(b, { uriTemplate: `${lane.root}/tickets/{id}` });
     const notes = await receiving(b, { uriTemplate: `${lane.root}/notes/{id}` });
+    // The sentinel alone, which the first change isn't.
+    const four = await receiving(b, `${lane.root}/tickets/ticket-4`);
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     await vi.waitFor(() => expect(attempts(page)).toEqual([[1, '200']]));
     const sentinel = await create(lane, 'tickets/ticket-4', { title: 'Sentinel', status: 'open' });
     await vi.waitFor(() => expect(tickets.events()).toHaveLength(2));
     expect(uris(tickets.events()[1], lane)).toEqual(['tickets/ticket-4']);
     expect(tickets.events()[1].eventId).toBe(sentinel.revision);
+    await vi.waitFor(() => expect(four.events().map(({ eventId }) => eventId)).toEqual([sentinel.revision]));
     await sleep(100);
     expect(notes.events()).toEqual([]);
+    expect(four.events()).toHaveLength(1);
   });
 
   it('R10: sends no event for a write refused after its first row', async () => {
@@ -184,6 +203,9 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       await vi.waitFor(() => expect(again.deliveries()).toHaveLength(1));
       const [event] = again.deliveries().map(({ body }) => body as unknown as Event);
       expect(event.eventId).toBe(closed.revision);
+      // The newest change's commit time, as ticket-3's stat reports it.
+      const { resource } = (await lane.client.request('resources/stat', { uri: `${lane.root}/tickets/ticket-3` })) as StatResourceResult;
+      expect(event.timestamp).toBe(resource.annotations!.lastModified);
       expect(event.data.changes).toEqual([
         { uri: `${lane.root}/tickets/ticket-3`, effect: 'updated', previousRevision: opened.revision, revision: closed.revision },
         closed.changes[1],
@@ -216,10 +238,14 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
 
   it('R10: after a restart mid-retry, the next event lists its change alone, and a catch-up brings the change the restart dropped', async () => {
     const lane = newLane(layout);
+    const page = await watch(lane, 'A');
     const b = await signedIn(lane, 'b');
     let answer = 503;
     const endpoint = receiver({ deliveries: () => new Response(null, { status: answer }) });
     await subscribe(b, { uriTemplate: `${lane.root}/tickets/{id}` }, endpoint.url(), newSecret());
+    // A long schedule, so no retry goes before the abort. The test's A is its own, so the
+    // schedule needs no resetting after.
+    await page.control('schedule', { delaysMs: [60_000, 60_000] });
     const from = (await timelines(lane))[TICKETS(layout)].latest;
     const dropped = await create(lane, 'tickets/ticket-3', { title: 'Dropped', status: 'open' });
     await vi.waitFor(() => expect(endpoint.deliveries()).toHaveLength(1));
@@ -234,6 +260,27 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       [sentinel.revision, ['tickets/ticket-4']],
     ]);
     expect((await catchUp(lane, 'tickets/{id}', from)).changes.map(({ revision }) => revision)).toContain(dropped.revision);
+  });
+
+  it("R10: sends a new subscription's event alone, never merged with one still out for the subscription it replaced", async () => {
+    const lane = newLane(layout);
+    const b = await signedIn(lane, 'b');
+    let answerFirst!: () => void;
+    const answered = new Promise<void>((resolve) => (answerFirst = resolve));
+    const endpoint = receiver({ deliveries: async (_received, index) => (index === 0 ? (await answered, new Response(null, { status: 200 })) : new Response(null, { status: 200 })) });
+    const named = { uriTemplate: `${lane.root}/tickets/{id}` };
+    const secret = newSecret();
+    await subscribe(b, named, endpoint.url(), secret);
+    await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
+    await vi.waitFor(() => expect(endpoint.deliveries()).toHaveLength(1));
+    // Unsubscribed and subscribed again while the first POST is out, so the slot is the same.
+    await b.client.request('events/unsubscribe', { name: EVENT, arguments: named, delivery: { url: endpoint.url() } });
+    await subscribe(b, named, endpoint.url(), secret);
+    const four = await create(lane, 'tickets/ticket-4', { title: 'After', status: 'open' });
+    answerFirst();
+    await vi.waitFor(() => expect(endpoint.deliveries()).toHaveLength(2));
+    expect(uris(parsed(endpoint.deliveries())[1], lane)).toEqual(['tickets/ticket-4']);
+    expect(parsed(endpoint.deliveries())[1].eventId).toBe(four.revision);
   });
 });
 

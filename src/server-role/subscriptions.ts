@@ -1,6 +1,7 @@
 // Every subscription A holds, keyed as SEP-3415 keys one: by who asked, where it delivers, the
 // event's name and its arguments, here the uri-specification. The Events module checks the
-// arguments, and this one the delivery, the cap, the grant and the write after a handshake.
+// arguments against the event's inputSchema, and this one the delivery, the cap, the grant and
+// the write after a handshake.
 import { JsonRpcError } from '../json-rpc';
 import { FORBIDDEN, RESOURCE_EXHAUSTED } from '../events-types';
 import { secretBytes } from '../standard-webhooks';
@@ -11,7 +12,7 @@ export interface SubscriptionsOptions {
   subscriptionIdKey: string;
   /** The longest lifetime A grants, and the one it grants when asked for none or for no expiry. */
   maxTtlMs: number;
-  /** How many subscriptions one principal may hold, across both levels. */
+  /** How many subscriptions one principal may hold. */
   subscriptionCap: number;
 }
 

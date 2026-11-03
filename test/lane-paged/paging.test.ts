@@ -32,7 +32,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const lane = newLane(layout);
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     for (const cursor of ['nonsense', btoa(JSON.stringify({ nextFrom: '9'.repeat(12), after: '' }))]) {
-      await expect(readCollection(lane, 'tickets/{id}', cursor)).rejects.toMatchObject({ code: -32602, message: 'Invalid cursor' });
+      await expect(readCollection(lane, 'tickets/{id}', cursor)).rejects.toMatchObject({ code: -32602, message: 'Invalid cursor', data: { uriTemplate: `${lane.root}/tickets/{id}` } });
     }
   });
 });

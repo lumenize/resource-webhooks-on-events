@@ -556,6 +556,28 @@ describe("A's grants", () => {
     });
   });
 
+  it('makes no attempt past a grant, a retry of an event sent before it included', async () => {
+    const lane = newLane();
+    const a = await signedIn(lane, 'a');
+    const b = await signedIn(lane, 'b');
+    const uri = `${lane.root}/notes/note-42`;
+    let refreshBefore = '';
+    await withMovableClock(async () => {
+      // The first attempt is answered 503 as the grant runs out.
+      const endpoint = receiver({
+        deliveries: () => {
+          vi.setSystemTime(Date.parse(refreshBefore) + 1000);
+          return new Response(null, { status: 503 });
+        },
+      });
+      refreshBefore = (await subscribe(b, uri, endpoint.url(), newSecret(), { ttlMs: 60_000 })).refreshBefore!;
+      await write(a, uri, 'Sent in time');
+      await vi.waitFor(() => expect(endpoint.deliveries()).toHaveLength(1));
+      await sleep(scheduleMs);
+      expect(endpoint.deliveries()).toHaveLength(1);
+    });
+  });
+
   it('delivers nothing past refreshBefore, and again once the subscription is refreshed', async () => {
     const lane = newLane();
     const a = await signedIn(lane, 'a');

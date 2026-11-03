@@ -860,7 +860,7 @@ Residuals to know of:
 **The verifier's findings,** fixed in Phase 6's commit:
 
 - Three coverage filters had no test that could fail without them: a read's, a uri's own, and a catch-up's on the split map. A test now reads and catches up on `tickets/ticket-3` beside `tickets/ticket-30`, on both layouts.
-- These build notes said every refusal's `data` names the uri-specification, and four refusals carried none. They now do, as the builder note on R10, R18 and R20 asks. The length bounds moved from the request schema to the event's `inputSchema`, since a schema's refusal carries its errors as `data`.
+- These build notes said every refusal's `data` names the uri-specification, and four refusals carried none. They now do, as the builder note on R10, R18 and R20 asks. The length bounds went into the event's `inputSchema` rather than the request schema, since a schema's refusal carries its errors as `data`.
 - `SCAN_LIMIT` counts each resource's newest row in a read, not every row the read's query passes over, and the comments now say so. Residual: a read's query still reads the superseded rows it doesn't count, so its work grows with a collection's history until a prune.
 - The note cascade's bound has a test of its own.
 - Nits: test titles that claimed more than their tests sent now send it or say less; a comment's byte count; `patchMimeTypes` lost "in its order of preference", which neither R13 nor R19 says; two stale headers; the mutation list's "on both layouts"; and the new names above leave out `ReadCollectionRequestParams` and `CatchUpCollectionRequestParams`, which are new too.
@@ -910,7 +910,7 @@ Residuals the verifier named:
 
 **For Larry.** Nothing needs a decision before Phase 7. These names are new in code, each yours to keep or rename:
 
-- `COLLECTION_UPDATED`, `RESOURCE_WEBHOOKS_EXTENSION`, `CollectionUpdatedData` and `EVENT_BODY_LIMIT`, which is 262,144 bytes in `wrangler.jsonc`, the 256 KiB SEP-3415 asks for.
+- `COLLECTION_UPDATED`, `RESOURCE_WEBHOOKS_EXTENSION`, `CollectionUpdatedData` and `EVENT_BODY_LIMIT`, which is 262,144 bytes in `wrangler.jsonc`, the 256 KiB SEP-3415 asks for. Also `extensionSchemaFor` in `validation.ts`, and `Change` in `events.ts`.
 - `test/lane/events.test.ts` and `test/scenarios/events.ts` carry the first flavor's `level1.test.ts` and `test/scenarios/level1.ts`, renamed, since levels were the first flavor's.
 
 Choices the phase made where the task file left one open:
@@ -934,7 +934,7 @@ Residuals to know of:
 
 **Retro.**
 
-- The first flavor's Events tests ported onto the new event and the strawman's writes passed on their first run, all 22, so each got a mutation of its own, and each went red under it.
+- The first flavor's Events tests ported onto the new event and the strawman's writes passed on their first run, all 22, so each got a mutation of its own, and each went red under it. Two of them first had none, which the verifier's fixes below add.
 - The merge's case where the waiting event had left its changes out first left a one-entry event waiting, which tested a merge too large instead. It now leaves a cascade's event waiting.
 - The JSON Schema validator in the R20 test refuses an `undefined` member, so the test builds an entry without `revision` rather than setting it `undefined`.
 - One mutation's text had the wrong indentation, and `mutate.mjs` refused it. The runner reported the refusal, and the mutation was rerun with the right text.
@@ -949,6 +949,16 @@ Residuals to know of:
 - The queue's own tests: replacing without merging, merging into the one in flight when one waits, sending a newer message while the older is in flight, and ignoring a cancel.
 - For Phase 4's verifier fixes: a read with no coverage filter, a uri that covers everything, a catch-up with no coverage filter, a refusal with no `data`, and the note's unbounded cascade.
 - For Phase 5's: the moment cap's count never reset, a catch-up with no `PAGE_BYTES` stop, a resource counted twice, a tombstone that blocks a stop, contents sent when the lengths tie, no empty patch, and a patch sent when the contents are shorter.
+
+**The verifier's findings,** fixed in a commit of their own after Phase 8's:
+
+- `events/subscribe` never checked its arguments against the `inputSchema` A lists, so `{"uri": 123}` failed as an internal error, and `{uri, other}` was taken and filed under the same key as `{uri}`, which an unsubscribe naming either then removed. A now refuses arguments the schema refuses with `InvalidParams`, on a subscribe and an unsubscribe alike, before any handshake, as the first flavor did.
+- Nothing tested that a merged event takes the newest change's `timestamp`. The waiting-merge test now does.
+- `notify`'s skip of a lapsed subscription and the queue's stop at a grant covered for each other, so neither could fail alone. The first went, since the queue's stop covers both cases, and a test now shows that a retry stops once the grant runs out.
+- Four other gaps now have tests: a new subscription's event sent while the one before it still has a POST out, which must not merge into that POST; a subscription covering the sentinel but not the first change; the payload schema's one-of; and the `data` of `Invalid cursor`.
+- The restart test set no long schedule, so a retry could slip in before the abort and fail it. It now sets one.
+- The two carried tests with no mutation got one each: an unsubscribe that keeps the row, and `listen` sending its secret without waiting for B to acknowledge it, which turns eight tests red.
+- `DeliveriesOptions.merge` became required, since both callers pass one, and three comments that claimed more than the code does now say less, one with first-flavor level wording.
 
 **Close-out.** The suite is 410 tests in 28 files, all passing, and both conformance suites pass. Phase 4's and Phase 5's verifier findings are fixed here, and Phase 2's residual on the error-code parse is closed.
 

@@ -1,6 +1,7 @@
 // The retry queue, below the public API, with a merge that joins two messages' bodies: a newer
-// message takes in the one its slot holds, waiting or in flight, and replaces it. Each test waits
-// on every delivery's promise rather than on a sleep. The event tests cover the merge end to end.
+// message takes in the one its slot holds, waiting or in flight, and replaces it. A test waits on
+// every delivery's promise before its last check, rather than on a sleep. The event tests cover
+// the merge end to end.
 import { describe, expect, it, vi } from 'vitest';
 import { Deliveries, type Message, type Send } from '../../src/server-role/deliveries';
 import { newSecret } from '../../src/standard-webhooks';

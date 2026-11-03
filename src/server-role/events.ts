@@ -3,6 +3,7 @@
 // One change sends one event to each subscription covering a resource it touched, listing the
 // change-set entries it covers, and a newer event for a subscription takes in one not yet
 // delivered (R10).
+import { Validator } from '@cfworker/json-schema';
 import { JsonRpcError } from '../json-rpc';
 import {
   FORBIDDEN,
@@ -16,7 +17,7 @@ import {
   type EventType,
 } from '../events-types';
 import { COLLECTION_UPDATED, type ChangeSetEntry, type CollectionUpdatedData, type UriSpecification } from '../extension-types';
-import type { Result } from '../vendor/mcp-spec/2026-07-28/schema';
+import { INVALID_PARAMS, type Result } from '../vendor/mcp-spec/2026-07-28/schema';
 import { randomId, type Deliveries, type Message } from './deliveries';
 import { MAX_NAMED_TEMPLATE_BYTES, MAX_NAMED_URI_BYTES, type ResourceWebhooks } from './resource-webhooks';
 import type { SubscriptionKey, Subscriptions } from './subscriptions';
@@ -41,6 +42,10 @@ const COLLECTION_UPDATED_TYPE: EventType = {
   inputSchema: inputSchema(),
   payloadSchema: { ...extensionSchemaFor('CollectionUpdatedData'), ...EXACTLY_ONE },
 };
+
+// The arguments a subscribe or an unsubscribe names, checked against the `inputSchema` A lists,
+// as SEP-3415 asks.
+const ARGUMENTS = new Validator(COLLECTION_UPDATED_TYPE.inputSchema as object, '2020-12', false);
 
 /** One resource a write changed: its change-set entry, and when its change committed. */
 export interface Change {
@@ -114,10 +119,9 @@ export class Events {
    * so they share one moment, the event's `eventId`.
    */
   notify(changes: readonly Change[]): void {
-    const now = new Date().toISOString();
+    // A lapsed subscription's row stays until A next starts, and the queue makes no attempt past
+    // its grant, so it gets nothing.
     for (const subscription of this.#options.subscriptions.named(COLLECTION_UPDATED)) {
-      // A lapsed subscription gets nothing, though its row stays until A next starts.
-      if (subscription.expiresAt < now) continue;
       const named = JSON.parse(subscription.arguments) as UriSpecification;
       const covers = this.#options.collections.covers(named);
       const covered = changes.filter(({ path }) => covers(path));
@@ -165,8 +169,10 @@ export class Events {
   #key(params: { name: string; arguments?: { [key: string]: unknown }; delivery: { url: string } }, principal: string | undefined): { key: SubscriptionKey; named: UriSpecification } {
     if (!principal) throw new JsonRpcError(FORBIDDEN, 'Subscribing needs an authenticated principal');
     if (params.name !== COLLECTION_UPDATED) throw new JsonRpcError(NOT_FOUND, `No event type ${params.name}`, { kind: 'event' });
+    const checked = ARGUMENTS.validate(params.arguments ?? {});
+    if (!checked.valid) throw new JsonRpcError(INVALID_PARAMS, "The arguments do not match the event's inputSchema", checked.errors.slice(0, 10));
     const named = (params.arguments ?? {}) as UriSpecification;
-    // The same refusals a catch-up gives the same uri-specification, notFound among them (R18).
+    // Then the refusals a catch-up gives the same uri-specification, notFound among them (R18).
     this.#options.collections.covers(named);
     const canonical = named.uri !== undefined ? { uri: named.uri } : { uriTemplate: named.uriTemplate };
     return { key: { principal, url: params.delivery.url, name: params.name, arguments: JSON.stringify(canonical) }, named: canonical };
@@ -174,7 +180,7 @@ export class Events {
 }
 
 // Each uri once, the older's entry giving the merged one its start and the newer's its end, since
-// the receiver never got the older event.
+// the receiver may never have got the older event.
 function mergeEntries(older: ChangeSetEntry[], newer: ChangeSetEntry[]): ChangeSetEntry[] {
   const byUri = new Map(older.map((entry) => [entry.uri, entry]));
   for (const entry of newer) {

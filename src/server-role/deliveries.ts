@@ -45,11 +45,8 @@ export type DeliveryReport =
 
 export interface DeliveriesOptions {
   send: Send;
-  /**
-   * The message to send in place of an older one in its slot and a newer one, which the receiver
-   * may never have got the older of. Without it, the newer replaces the older.
-   */
-  merge?: (older: Message, newer: Message) => Message;
+  /** The message to send in place of an older one in its slot and a newer one, which the receiver may never have got the older of. */
+  merge: (older: Message, newer: Message) => Message;
   /** Keeps a promise alive past the request that started it, as `ctx.waitUntil` does. */
   waitUntil: (promise: Promise<unknown>) => void;
   /** The delays between attempts, in milliseconds, already clamped to SEP-3415's bounds. */
@@ -172,14 +169,14 @@ export class Deliveries {
     // An unsubscribe's POST still out belongs to the subscription that ended, so nothing merges
     // into it, and a message waiting behind it belongs to the subscription made since.
     const older = existing.cancelled ? existing.pending : (existing.pending ?? existing.current);
-    existing.pending = older && this.#options.merge ? this.#options.merge(older, message) : message;
+    existing.pending = older ? this.#options.merge(older, message) : message;
     existing.wake?.();
   }
 
   /**
    * Stops every delivery for a subscription, as unsubscribing does. A POST already out keeps its
-   * slot until it is answered, so the next delivery for that URI, if the same key subscribes
-   * again, cannot overtake it.
+   * slot until it is answered, so the next delivery for the subscription, if the same key
+   * subscribes again, cannot overtake it.
    */
   cancel(subscriptionId: string): void {
     for (const [slot, state] of this.#slots) {
