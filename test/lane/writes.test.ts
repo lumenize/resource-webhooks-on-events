@@ -198,6 +198,15 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(renamed.changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-7`]);
   });
 
+  it('refuses a close whose cascade would make its note larger than 16 KiB', async () => {
+    const lane = newLane(layout);
+    // The note at the bound, so `done` would push it past.
+    await create(lane, 'notes/ticket-3', { title: 'x'.repeat(MAX_CONTENTS_BYTES - JSON.stringify({ title: '' }).length) });
+    const opened = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
+    const refused = await refusal(update(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'closed' }, opened.revision));
+    expect(refused).toEqual({ code: -32602, data: { uri: `${lane.root}/notes/ticket-3` } });
+  });
+
   it('refuses a write whose cascade would make a resource larger than 16 KiB', async () => {
     const lane = newLane(layout);
     // ticket-9 at the bound, so naming it as a duplicate would push it past.

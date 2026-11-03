@@ -844,7 +844,7 @@ Residuals to know of:
 - A loop of requests built as an array of promises left the later ones unawaited while the first was checked, so vitest reported their refusals as unhandled. The loops now build each request when it is checked.
 - The mutation comparing `from` with the oldest moment by `<=` turns ten tests red, since every catch-up from a fresh timeline starts at its oldest moment, zero. The boundary is doing its job, so the mutation is not too broad.
 
-**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red on both layouts:
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning the test named red, on both layouts where the test runs on both and the mutation can show on both:
 
 - R13's test, for dropping deletions, for keeping rows the uri-specification doesn't cover, for a read carrying tombstones, and for a read's scan that doesn't start at its prefix, which also turns the `nextFrom` test red.
 - R13's first sub-bullet, for answering a covered uri no resource holds with `notFound`.
@@ -857,6 +857,14 @@ Residuals to know of:
 - R21's SHOULD, for a `CUTOFF_WINDOW_MS` shorter than `SUBSCRIPTION_TTL_MS` in `wrangler.jsonc`.
 - For Phase 3's fixes: the bound test, for an unbounded cascade, and the duplicate test's three mutations again, now on both layouts.
 
+**The verifier's findings,** fixed in Phase 6's commit:
+
+- Three coverage filters had no test that could fail without them: a read's, a uri's own, and a catch-up's on the split map. A test now reads and catches up on `tickets/ticket-3` beside `tickets/ticket-30`, on both layouts.
+- These build notes said every refusal's `data` names the uri-specification, and four refusals carried none. They now do, as the builder note on R10, R18 and R20 asks. The length bounds moved from the request schema to the event's `inputSchema`, since a schema's refusal carries its errors as `data`.
+- `SCAN_LIMIT` counts each resource's newest row in a read, not every row the read's query passes over, and the comments now say so. Residual: a read's query still reads the superseded rows it doesn't count, so its work grows with a collection's history until a prune.
+- The note cascade's bound has a test of its own.
+- Nits: test titles that claimed more than their tests sent now send it or say less; a comment's byte count; `patchMimeTypes` lost "in its order of preference", which neither R13 nor R19 says; two stale headers; the mutation list's "on both layouts"; and the new names above leave out `ReadCollectionRequestParams` and `CatchUpCollectionRequestParams`, which are new too.
+
 **Close-out.** Phase 3's verifier findings are fixed here. The prunes Phase 3 built now have their tests. The suite is 325 tests in 20 files, all passing, and both conformance suites pass.
 
 ### Phase 5
@@ -865,9 +873,9 @@ Residuals to know of:
 
 Choices the phase made where the task file left one open:
 
-- A sends a merge patch only when the catch-up lists `application/merge-patch+json`, A still keeps the contents at `previousRevision`, the change can be written as a merge patch, and the patch is shorter than the contents, in UTF-8. Otherwise it sends the contents, which R19's MAY allows. An update that changes only whitespace, which no merge patch needs, gets its contents too.
+- A sends a merge patch when the catch-up lists `application/merge-patch+json`, A still keeps the contents at `previousRevision`, and the change can be written as a merge patch, unless the contents are shorter, in UTF-8. Phase 6's commit corrected this: the first build sent contents whenever the patch was not shorter.
 - A catch-up stops at the end of a moment once `PAGE_SIZE` resources, `SCAN_LIMIT` rows or `PAGE_BYTES` of contents are reached, the same limits a read uses. It counts the contents of each resource it brings as it stood at the moment, rather than the patch it may send, since it can't know the patch until it stops.
-- `MOMENT_CHANGE_CAP` counts the covered changes at one moment, so a uri on its own never meets it.
+- `MOMENT_CHANGE_CAP` counts the covered changes at one moment, so a uri on its own never exceeds it.
 
 **Retro.**
 
@@ -885,7 +893,64 @@ Choices the phase made where the task file left one open:
 - The contents-lost test, for stopping where a resource has lost its contents.
 - The `lane-limits` test, for a catch-up that ignores `SCAN_LIMIT`.
 
+**The verifier's findings,** fixed in Phase 6's commit:
+
+- R19 lets A send contents in place of a patch only when the contents are smaller, and these notes said otherwise. A now sends the patch when the two tie, and `{}` for a change only to whitespace, so the branch Phase 5 dropped is back. Tests cover both, and contents shorter than the patch.
+- Three of the phase's limits had no test that could fail without them: the moment cap's count a moment at a time, a catch-up's stop at `PAGE_BYTES` with a resource changed twice counted once, and a stop after a tombstone, which has no contents to lose. Each now has one.
+- The limits' JSDoc now says what a catch-up does with them.
+
+Residuals the verifier named:
+
+- A catch-up that keeps a row whose contents are lost runs past every limit until it can stop, as the builder note on R13 and R21 asks. For a `from` older than `CUTOFF_WINDOW_MS`, that can make one result hold every resource changed since. It checks every row it keeps at each moment while it runs on, so its cost grows as the square of their number.
+- `MOMENT_CHANGE_CAP` lets a uri on its own exceed it never, rather than meet it never, as these notes first said.
+
 **Close-out.** The suite is 342 tests in 23 files, all passing, and both conformance suites pass. Phase 4's paging test now follows a run of catch-ups.
+
+### Phase 6
+
+**For Larry.** Nothing needs a decision before Phase 7. These names are new in code, each yours to keep or rename:
+
+- `COLLECTION_UPDATED`, `RESOURCE_WEBHOOKS_EXTENSION`, `CollectionUpdatedData` and `EVENT_BODY_LIMIT`, which is 262,144 bytes in `wrangler.jsonc`, the 256 KiB SEP-3415 asks for.
+- `test/lane/events.test.ts` and `test/scenarios/events.ts` carry the first flavor's `level1.test.ts` and `test/scenarios/level1.ts`, renamed, since levels were the first flavor's.
+
+Choices the phase made where the task file left one open:
+
+- The event's `inputSchema` and `payloadSchema` come from the extension's TypeScript types, with `oneOf` and `maxLength` added in code, since the types can't say exactly one of two members, or a bound. JSON Schema counts characters and A counts UTF-8 bytes, so A may refuse a name the schema admits, never the reverse.
+- A merged entry runs from the older event's start to the newer's end. It is `created` when the older entry had no `previousRevision`, `deleted` when the newer entry is, and `updated` otherwise. A merge takes in the message waiting or the one in flight. If the one in flight then succeeds, the merged event repeats its changes, which R11 makes harmless.
+- "One asking for poll or push gets `Unsupported`" is read as `events/poll` and `events/stream`, as the first flavor's `refuseMode` answers them. An `events/subscribe` whose `delivery.mode` isn't `webhook` fails SEP-3415's schema with `InvalidParams`.
+- A's Wipe now also forgets every subscription, verification and queued delivery, as the first flavor's did.
+- The document fetch and a delivery's `send` share one error-code parse, which closes Phase 2's residual.
+
+What differs from the phase as written:
+
+- The first flavor's "stops delivering past refreshBefore, and a new subscribe naming the version held answers the current one" became "delivers nothing past refreshBefore, and again once refreshed", since a subscribe here carries no version.
+- Two mutations the phase names can't be built here. Enqueueing, yielding and then committing needs A's writes to await, and each commits before any await, so the order test guards the order should writes come to, as R6's several writers would. Keeping retries across the abort needs them stored, and they live in memory, which an abort always drops.
+- B's eviction test came in with no mutation of its own, since it tests B, whose Phase 1 mutations stand.
+
+Residuals to know of:
+
+- A lapsed subscription's row stays until A next starts, and gets no event meanwhile, as in the first flavor.
+- Every write works out each subscription's coverage again, so its cost grows with the number of subscriptions.
+
+**Retro.**
+
+- The first flavor's Events tests ported onto the new event and the strawman's writes passed on their first run, all 22, so each got a mutation of its own, and each went red under it.
+- The merge's case where the waiting event had left its changes out first left a one-entry event waiting, which tested a merge too large instead. It now leaves a cascade's event waiting.
+- The JSON Schema validator in the R20 test refuses an `undefined` member, so the test builds an entry without `revision` rather than setting it `undefined`.
+- One mutation's text had the wrong indentation, and `mutate.mjs` refused it. The runner reported the refusal, and the mutation was rerun with the right text.
+
+**Mutation checks**, each run with Lumenize's `scripts/mutate.mjs` on a green file, each turning its test red:
+
+- R10's tests, for one event per resource, for an `eventId` built from the moment and the uri-specification, for a deletion's entry with no `revision`, and for enqueueing a refused write's first row before the rollback.
+- The merges: merging only a waiting event, reusing the older's webhook-id, concatenating entries, keeping the newer entry's `previousRevision`, and in `lane-body-limit`, unioning only the lists present and dropping the limit.
+- R20's tests, for leaving out the `payloadSchema`, for an `inputSchema` with no bounds, and for a subscribe with no uri or template bound. R18's, for a subscribe that skips the coverage check.
+- The grants: a lapsed subscription still sent to, an id derived from another key, and no sweep of lapsed rows on start.
+- One for each case carried from the first flavor: no retries, an echo left unchecked, a verification report with no error code, writing before the handshake, a subscribe that a Wipe outlasted, no handshake cache, no verification burst, no subscription cap, no cap check after the handshake, no delivery check, no `Mcp-Name` for events, signing once for every retry, following a redirect, retrying a `410`, no attempt timeout, a cursor on a refresh, retries kept after an unsubscribe, `events/poll` answered, a schedule never reset, and retries kept after a Wipe.
+- The queue's own tests: replacing without merging, merging into the one in flight when one waits, sending a newer message while the older is in flight, and ignoring a cancel.
+- For Phase 4's verifier fixes: a read with no coverage filter, a uri that covers everything, a catch-up with no coverage filter, a refusal with no `data`, and the note's unbounded cascade.
+- For Phase 5's: the moment cap's count never reset, a catch-up with no `PAGE_BYTES` stop, a resource counted twice, a tombstone that blocks a stop, contents sent when the lengths tie, no empty patch, and a patch sent when the contents are shorter.
+
+**Close-out.** The suite is 410 tests in 28 files, all passing, and both conformance suites pass. Phase 4's and Phase 5's verifier findings are fixed here, and Phase 2's residual on the error-code parse is closed.
 
 ## Notes kept out of the proposal
 

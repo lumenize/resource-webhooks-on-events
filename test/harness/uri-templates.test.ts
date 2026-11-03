@@ -1,6 +1,6 @@
 // How long a template match takes, which only Node can time: inside workerd the clock stands
 // still while synchronous code runs. Every write matches its uri against the listed templates,
-// and a later phase matches templates a client names.
+// and R24's check matches a template a client names against them.
 import { describe, expect, it } from 'vitest';
 import { templateCovers, templateMatcher } from '../../src/server-role/uri-templates';
 

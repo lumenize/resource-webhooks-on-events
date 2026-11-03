@@ -1,5 +1,6 @@
-// A, the MCP server, and the authorization server its clients get tokens from. Its page back
-// channel reports what it does, and takes the operator's controls.
+// A, the MCP server, and the authorization server its clients get tokens from. It sends its
+// webhooks with fetch, and its page back channel reports what it does and takes the operator's
+// controls.
 import { DurableObject } from 'cloudflare:workers';
 import { AuthorizationServer } from './auth/authorization-server';
 import { clientMetadataDocument, clientMetadataUrl, mcpEndpoint, resourceMetadataUrl } from './auth/metadata';
@@ -7,6 +8,7 @@ import { acceptPage, authorized, PAGE_TAG, report, type Control } from './back-c
 import { CLAIMS_HEADER, INSTANCE } from './edge';
 import { serveMcp } from './mcp-http';
 import { readCapped } from './read-capped';
+import { MAX_ANSWER_BYTES, type Send } from './server-role/deliveries';
 import { LAYOUTS, ServerRole, type ServerExtras } from './server-role/server-role';
 
 interface Claims {
@@ -16,6 +18,14 @@ interface Claims {
 
 /** The largest client ID metadata document A reads. */
 const MAX_DOCUMENT_BYTES = 16 * 1024;
+
+// Cloudflare answers some fetches with a page of its own naming an error code: 1016 when its
+// resolver gives no address, 1002 for a prohibited one, 526 for a certificate that does not match
+// the name. A receiver's body may name one too, which only misleads the page.
+function errorCodeOf(text: string): number | undefined {
+  const code = /^error code: (\d+)/.exec(text)?.[1];
+  return code === undefined ? undefined : Number(code);
+}
 
 export class Server extends DurableObject<Env> {
   /** What a subclass adds to A's tools and resources, as the conformance build's fixtures. */
@@ -30,6 +40,24 @@ export class Server extends DurableObject<Env> {
     // The edge sends A only requests for its own instance, by name, so the name is present.
     const name = ctx.id.name!;
     this.#base = `/server/${name}`;
+    const timeoutMs = Number(env.ATTEMPT_TIMEOUT_MS);
+    // A delivery never follows a redirect, so any 3xx is a failed attempt and its Location is
+    // never fetched.
+    const send: Send = async (url, headers, body, readAnswer) => {
+      try {
+        const response = await fetch(url, { method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+        if (!readAnswer) {
+          await response.body?.cancel();
+          return { status: response.status };
+        }
+        const answer = await readCapped(response.body, MAX_ANSWER_BYTES);
+        const text = answer ? new TextDecoder().decode(answer) : '';
+        const errorCode = errorCodeOf(text);
+        return { status: response.status, body: text, ...(errorCode === undefined ? {} : { errorCode }) };
+      } catch (error) {
+        return { failure: (error as Error).name === 'TimeoutError' ? 'timeout' : 'connection_refused' };
+      }
+    };
     this.#role = new ServerRole({
       sql: ctx.storage.sql,
       transactionSync: (fn) => ctx.storage.transactionSync(fn),
@@ -45,6 +73,15 @@ export class Server extends DurableObject<Env> {
         momentChangeCap: Number(env.MOMENT_CHANGE_CAP),
       },
       extras: (new.target as typeof Server).extras,
+      send,
+      waitUntil: (promise) => ctx.waitUntil(promise),
+      retrySchedule: () => this.#schedule(),
+      verificationBurst: Number(env.VERIFICATION_BURST),
+      subscriptionIdKey: env.SUBSCRIPTION_ID_KEY,
+      maxTtlMs: Number(env.SUBSCRIPTION_TTL_MS),
+      subscriptionCap: Number(env.SUBSCRIPTION_CAP),
+      eventBodyLimit: Number(env.EVENT_BODY_LIMIT),
+      report: (body) => report(ctx, 'A', body),
     });
     const sockets = `${env.ORIGIN}/gateway/${env.GATEWAY_INSTANCE}/ws/`;
     this.#authorization = new AuthorizationServer({
@@ -142,9 +179,7 @@ export class Server extends DurableObject<Env> {
       return undefined;
     }
     const text = bytes ? new TextDecoder().decode(bytes) : '';
-    // Cloudflare answers some fetches with a page of its own naming an error code, as 1016 when
-    // its resolver gives no address.
-    const errorCode = /^error code: (\d+)/.exec(text)?.[1];
+    const errorCode = errorCodeOf(text);
     let document: unknown;
     try {
       document = response.status === 200 && bytes ? JSON.parse(text) : undefined;
@@ -152,7 +187,7 @@ export class Server extends DurableObject<Env> {
       document = undefined;
     }
     const failure = !bytes ? 'too_large' : response.status === 200 && document === undefined ? 'not_json' : undefined;
-    report(this.ctx, 'A', { kind: 'document', url, status: response.status, ...(errorCode ? { errorCode: Number(errorCode) } : {}), ...(failure ? { failure } : {}) });
+    report(this.ctx, 'A', { kind: 'document', url, status: response.status, ...(errorCode === undefined ? {} : { errorCode }), ...(failure ? { failure } : {}) });
     return document;
   }
 
@@ -171,7 +206,7 @@ export class Server extends DurableObject<Env> {
   // What A holds, to every page listening, and nothing computed when none is.
   #reportHoldings(): void {
     if (this.ctx.getWebSockets(PAGE_TAG).length === 0) return;
-    report(this.ctx, 'A', { kind: 'holdings', wipes: this.#wipes(), schedule: this.#schedule() });
+    report(this.ctx, 'A', { kind: 'holdings', wipes: this.#wipes(), schedule: this.#schedule(), ...this.#role.holdings() });
   }
 
   // The edge verified the token, but only A knows its Wipe count, so a token from before a Wipe

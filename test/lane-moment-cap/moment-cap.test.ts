@@ -17,4 +17,12 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     // A uri on its own is one change at that moment, within the cap.
     expect((await catchUp(lane, 'tickets/ticket-7', from)).changes).toHaveLength(1);
   });
+
+  it('D15: counts the cap a moment at a time, so one change at each of two moments is answered', async () => {
+    const lane = newLane(layout);
+    const from = (await timelines(lane))[layout === 'split' ? 'tickets' : 'work'].latest;
+    await create(lane, 'tickets/ticket-1', { title: 'One', status: 'open' });
+    await create(lane, 'tickets/ticket-2', { title: 'Two', status: 'open' });
+    expect((await catchUp(lane, 'tickets/{id}', from)).changes).toHaveLength(2);
+  });
 });

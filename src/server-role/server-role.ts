@@ -1,9 +1,13 @@
 // A's role as an MCP server of 2026-07-28: its core methods, its tickets and notes as resources,
-// which the Filesystems strawman's four methods write onto its timelines, and the resources,
-// templates and tools a host adds, as the conformance suite's fixtures. It takes a message the
-// transport has already read and checked, with the principal the edge verified, and from its host
-// `sql` and how to run a transaction, so a Lumenize node can compose it as A does here.
+// which the Filesystems strawman's four methods write onto its timelines, the extension's two
+// methods and its event over SEP-3415's Events, and the resources, templates and tools a host
+// adds, as the conformance suite's fixtures. It takes a message the transport has already read and
+// checked, with the principal the edge verified, and from its host `sql`, how to run a
+// transaction, how to send a webhook and how to keep a promise alive, so a Lumenize node can
+// compose it as A does here.
+import { EVENTS_EXTENSION, type EventsSubscribeRequestParams, type EventsUnsubscribeRequestParams } from '../events-types';
 import {
+  RESOURCE_WEBHOOKS_EXTENSION,
   type CatchUpCollectionRequestParams,
   type ReadCollectionRequestParams,
   NOT_SUPPORTED,
@@ -40,7 +44,10 @@ import type {
   Tool,
 } from '../vendor/mcp-spec/2026-07-28/schema';
 import { INVALID_PARAMS, LATEST_PROTOCOL_VERSION, METHOD_NOT_FOUND } from '../vendor/mcp-spec/2026-07-28/schema';
+import { clampSchedule, Deliveries, type DeliveryReport, type Send } from './deliveries';
+import { Events } from './events';
 import { ResourceWebhooks, type CollectionLimits } from './resource-webhooks';
+import { Subscriptions, type Subscription } from './subscriptions';
 import { requestErrors, resourceErrors } from './validation';
 import { Timelines, type Row, type TimelineMap, type Write, type Written } from './version-store';
 
@@ -83,6 +90,19 @@ export interface ServerRoleOptions {
   /** How far one page of a collection read, or one catch-up, goes. */
   limits: CollectionLimits;
   extras?: ServerExtras;
+  /** Sends one webhook POST, without following redirects. */
+  send: Send;
+  /** Keeps a promise alive past its request, as `ctx.waitUntil` does. */
+  waitUntil: (promise: Promise<unknown>) => void;
+  /** The delays between delivery attempts A is set to, before they are held to SEP-3415's bounds. */
+  retrySchedule: () => readonly number[];
+  verificationBurst: number;
+  subscriptionIdKey: string;
+  maxTtlMs: number;
+  subscriptionCap: number;
+  /** The largest body an event may have, in UTF-8 bytes, past which it leaves `changes` out. */
+  eventBodyLimit: number;
+  report?: (report: DeliveryReport) => void;
 }
 
 /**
@@ -118,6 +138,9 @@ const UNCACHED = { ttlMs: 0, cacheScope: 'public' } as const;
 export class ServerRole {
   readonly store: Timelines;
   readonly #webhooks: ResourceWebhooks;
+  readonly #deliveries: Deliveries;
+  readonly #subscriptions: Subscriptions;
+  readonly #events: Events;
   readonly #root: string;
   readonly #map: TimelineMap;
   readonly #transactionSync: <T>(fn: () => T) => T;
@@ -132,6 +155,21 @@ export class ServerRole {
     this.#extras = options.extras ?? {};
     this.store = new Timelines(options.sql, { map: options.map, cutoffWindowMs: options.cutoffWindowMs });
     this.#webhooks = new ResourceWebhooks({ store: this.store, root: options.root, map: options.map, limits: options.limits });
+    this.#deliveries = new Deliveries({
+      send: options.send,
+      waitUntil: options.waitUntil,
+      schedule: () => clampSchedule(options.retrySchedule()),
+      verificationBurst: options.verificationBurst,
+      verificationTtlMs: options.maxTtlMs,
+      merge: (older, newer) => this.#events.merge(older, newer),
+      report: options.report,
+    });
+    this.#subscriptions = new Subscriptions(options.sql, {
+      subscriptionIdKey: options.subscriptionIdKey,
+      maxTtlMs: options.maxTtlMs,
+      subscriptionCap: options.subscriptionCap,
+    });
+    this.#events = new Events({ deliveries: this.#deliveries, subscriptions: this.#subscriptions, collections: this.#webhooks, eventBodyLimit: options.eventBodyLimit });
     const methods: [string, Method][] = [
       ['server/discover', () => this.#discover()],
       ['resources/list', (params) => this.#listResources(params)],
@@ -143,6 +181,11 @@ export class ServerRole {
       ['resources/delete', (params) => this.#delete(params as unknown as DeleteResourceRequestParams)],
       ['resources/collection/read', (params) => this.#webhooks.read(params as unknown as ReadCollectionRequestParams)],
       ['resources/collection/catchup', (params) => this.#webhooks.catchUp(params as unknown as CatchUpCollectionRequestParams)],
+      ['events/list', (params) => (requireNoCursor(params), this.#events.list())],
+      ['events/subscribe', (params, principal) => this.#events.subscribe(params as unknown as EventsSubscribeRequestParams, principal)],
+      ['events/unsubscribe', (params, principal) => this.#events.unsubscribe(params as unknown as EventsUnsubscribeRequestParams, principal)],
+      ['events/poll', () => this.#events.refuseMode()],
+      ['events/stream', () => this.#events.refuseMode()],
     ];
     // A has no tools of its own, so it serves the two tool methods only for a host's.
     if (this.#tools().length > 0) {
@@ -165,8 +208,18 @@ export class ServerRole {
     return { ...result, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO, ...result._meta } };
   }
 
-  /** Empties every timeline, as the page's Wipe does (R21). */
+  /** What A holds, for the page: each subscription, without its secret. */
+  holdings(): { subscriptions: Omit<Subscription, 'secret'>[] } {
+    return { subscriptions: this.#subscriptions.held() };
+  }
+
+  /**
+   * Empties every timeline, and forgets every subscription, verification and pending delivery, as
+   * the page's Wipe does (R21).
+   */
   wipe(): void {
+    this.#deliveries.clear();
+    this.#subscriptions.clear();
     this.store.wipe();
   }
 
@@ -178,7 +231,8 @@ export class ServerRole {
     const capabilities: ServerCapabilities = {
       resources: {},
       ...(this.#tools().length > 0 ? { tools: {} } : {}),
-      extensions: { [RESOURCE_OPERATIONS_EXTENSION]: {} },
+      // Events with an empty settings object, since A sends no list-change notifications.
+      extensions: { [RESOURCE_OPERATIONS_EXTENSION]: {}, [EVENTS_EXTENSION]: {}, [RESOURCE_WEBHOOKS_EXTENSION]: {} },
     };
     return { resultType: 'complete', supportedVersions: [LATEST_PROTOCOL_VERSION], capabilities, ...UNCACHED };
   }
@@ -264,7 +318,8 @@ export class ServerRole {
   }
 
   // One write, in one transaction: a refusal anywhere in it leaves every row and every timeline's
-  // latest moment as they were.
+  // latest moment as they were. Its events are sent only once it has committed, so a catch-up
+  // made when one arrives brings the change (R10).
   #write(path: string, steps: (write: Write) => void): WriteResourceResult {
     const written = this.#transactionSync(() => {
       const write = this.store.begin();
@@ -273,6 +328,7 @@ export class ServerRole {
     });
     const target = written.find(({ row }) => row.path === path)!;
     const changes = written.map((each) => this.#entry(each));
+    this.#events.notify(written.map(({ row }, i) => ({ path: row.path, entry: changes[i], writtenAt: row.writtenAt })));
     return { resultType: 'complete', resource: this.#resource(target.row), revision: target.row.moment, changes };
   }
 

@@ -6,7 +6,9 @@
 import { expect, vi } from 'vitest';
 import { clientMetadataUrl } from '../../src/auth/metadata';
 import { fromBase64url } from '../../src/auth/signing';
-import { createMcpClient, OAuthSession, type McpClient } from '../../src/client/mcp-client';
+import { createMcpClient, McpError, OAuthSession, type McpClient } from '../../src/client/mcp-client';
+import type { EventsSubscribeResult } from '../../src/events-types';
+import { COLLECTION_UPDATED, type UriSpecification, type WriteResourceResult } from '../../src/extension-types';
 import { newSecret } from '../../src/standard-webhooks';
 
 /** What a scenario runs against: the lane's Worker, or a deployed one. */
@@ -93,6 +95,33 @@ export async function signedIn(tier: Tier, name: string): Promise<Party> {
   const client = createMcpClient({ endpoint: `${tier.root}/mcp`, clientInfo: { name, version: '0.0.0' }, oauth: session, fetch: send });
   const token = await session.tokenFor(`${tier.root}/mcp`);
   return { client, session, sub: subOf(token), instance: `i_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}` };
+}
+
+/**
+ * Writes a note at `uri` with the strawman's methods, creating it or replacing it whole, and
+ * answers its revision.
+ */
+export async function write(party: Party, uri: string, title = 'Buy milk', done = false): Promise<string> {
+  const contents = { uri, mimeType: 'application/json', text: JSON.stringify({ title, done }) };
+  try {
+    return (await party.client.request<WriteResourceResult>('resources/create', { uri, contents })).revision;
+  } catch (error) {
+    const data = error instanceof McpError ? (error.data as { reason?: string; currentRevision?: string } | undefined) : undefined;
+    if (data?.reason !== 'alreadyExists') throw error;
+    return (await party.client.request<WriteResourceResult>('resources/update', { uri, contents, ifMatch: data.currentRevision })).revision;
+  }
+}
+
+/** A subscription to `mcp.resource.collection.updated` for a uri-specification, a uri given as a string, or its refresh. */
+export function subscribe(party: Party, named: string | UriSpecification, url: string, secret: string, extra: Record<string, unknown> = {}): Promise<EventsSubscribeResult> {
+  return party.client.request<EventsSubscribeResult>('events/subscribe', {
+    name: COLLECTION_UPDATED,
+    arguments: typeof named === 'string' ? { uri: named } : named,
+    delivery: { mode: 'webhook', url, secret },
+    cursor: null,
+    ttlMs: 3_600_000,
+    ...extra,
+  });
 }
 
 /** The `sub` a token of A's carries, which a test reads to name a hook URL before any socket opens. */

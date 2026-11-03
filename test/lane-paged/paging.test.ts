@@ -28,7 +28,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     ]);
   });
 
-  it('R22: refuses a cursor A did not issue', async () => {
+  it("R22: refuses a cursor that doesn't parse, or names a moment past the timeline's latest", async () => {
     const lane = newLane(layout);
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     for (const cursor of ['nonsense', btoa(JSON.stringify({ nextFrom: '9'.repeat(12), after: '' }))]) {

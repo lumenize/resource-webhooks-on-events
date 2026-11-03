@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyMergePatch, type JsonValue } from '../../src/vendor/lumenize-merge-patch/merge-patch';
 import { LAYOUTS, newLane } from '../lane/lane';
-import { catchUp, create, read, timelines, update } from '../lane/resources';
+import { catchUp, create, read, remove, timelines, update } from '../lane/resources';
 
 const MERGE = { patchMimeTypes: ['application/merge-patch+json'] };
 const TICKETS = (layout: string) => (layout === 'split' ? 'tickets' : 'work');
@@ -48,6 +48,16 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       ['tickets/ticket-9', closed.revision],
     ]);
     expect({ hasMore: result.hasMore, nextFrom: result.nextFrom }).toEqual({ hasMore: true, nextFrom: closed.revision });
+  });
+
+  it('R14: stops short after a tombstone, which has no contents to lose', async () => {
+    const lane = newLane(layout);
+    const three = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
+    const from = (await timelines(lane))[TICKETS(layout)].latest;
+    const [deleted] = (await remove(lane, 'tickets/ticket-3', three.revision)).changes;
+    await create(lane, 'tickets/ticket-4', { title: 'Later', status: 'open' });
+    const result = await catchUp(lane, 'tickets/{id}', from);
+    expect(result).toMatchObject({ hasMore: true, nextFrom: deleted.revision, changes: [{ uri: `${lane.root}/tickets/ticket-3`, effect: 'deleted' }] });
   });
 
   it('R13, R21: stops short only where every resource it brings still has its contents, and otherwise runs on', async () => {

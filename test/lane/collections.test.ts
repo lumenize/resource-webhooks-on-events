@@ -62,6 +62,16 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect((await readCollection(lane, 'tickets/ticket-3')).contents.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-3`]);
   });
 
+  it("R22, R13: a uri's collection holds that resource alone, not one whose path begins with it", async () => {
+    const lane = newLane(layout);
+    const from = (await timelines(lane))[TICKETS(layout)].latest;
+    await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
+    await create(lane, 'tickets/ticket-30', { title: 'A neighbour', status: 'open' });
+    const only = [`${lane.root}/tickets/ticket-3`];
+    expect((await readCollection(lane, 'tickets/ticket-3')).contents.map(({ uri }) => uri)).toEqual(only);
+    expect((await catchUp(lane, 'tickets/ticket-3', from)).changes.map(({ uri }) => uri)).toEqual(only);
+  });
+
   it("R13's errors: refuses an uncovered uri with notFound, both or neither named, no from, and names past their bounds, before anything is read", async () => {
     const lane = newLane(layout);
     const latest = (await timelines(lane))[TICKETS(layout)].latest;
@@ -73,6 +83,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const both = { uri: uncovered, uriTemplate: `${lane.root}/tickets/{id}` };
     for (const [method, params] of [
       ['resources/collection/read', both],
+      ['resources/collection/read', {}],
       ['resources/collection/catchup', { ...both, from: latest }],
       ['resources/collection/catchup', { uriTemplate: `${lane.root}/tickets/{id}` }],
       ['resources/collection/read', { uri: `${lane.root}/tickets/${'x'.repeat(2048)}` }],
@@ -83,21 +94,30 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       // Each is refused as invalid, never as notFound, which would mean A had looked something up.
       expect({ method, params, code: refused.code, notFound: (refused.data as { reason?: string } | undefined)?.reason === 'notFound' }).toEqual({ method, params, code: -32602, notFound: false });
     }
+    // Each refusal A makes itself names what the request named, as notFound does.
+    const longUri = `${lane.root}/tickets/${'x'.repeat(2048)}`;
+    const longTemplate = `${lane.root}/tickets/{id}${'x'.repeat(1024)}`;
+    expect((await refusal(lane.client.request('resources/collection/read', both))).data).toEqual(both);
+    expect((await refusal(lane.client.request('resources/collection/read', { uri: longUri }))).data).toEqual({ uri: longUri });
+    expect((await refusal(lane.client.request('resources/collection/read', { uriTemplate: longTemplate }))).data).toEqual({ uriTemplate: longTemplate });
   });
 
   it('R13, D23: refuses a request whose Mcp-Name is missing or differs from its uri or uriTemplate, with 400', async () => {
     const lane = newLane(layout);
     const latest = (await timelines(lane))[TICKETS(layout)].latest;
     const template = `${lane.root}/tickets/{id}`;
-    for (const [method, params] of [
-      ['resources/collection/read', { uriTemplate: template }],
-      ['resources/collection/catchup', { uriTemplate: template, from: latest }],
+    const uri = `${lane.root}/tickets/ticket-3`;
+    for (const [method, params, name] of [
+      ['resources/collection/read', { uriTemplate: template }, template],
+      ['resources/collection/catchup', { uriTemplate: template, from: latest }, template],
+      ['resources/collection/read', { uri }, uri],
+      ['resources/collection/catchup', { uri, from: latest }, uri],
     ] as const) {
       for (const headers of [{}, { 'Mcp-Name': `${lane.root}/notes/{id}` }] as Record<string, string>[]) {
         const response = await post(lane, method, params, headers);
         expect({ method, headers, status: response.status, code: ((await response.json()) as { error: { code: number } }).error.code }).toEqual({ method, headers, status: 400, code: -32020 });
       }
-      expect((await post(lane, method, params, { 'Mcp-Name': template })).status).toBe(200);
+      expect((await post(lane, method, params, { 'Mcp-Name': name })).status).toBe(200);
     }
   });
 

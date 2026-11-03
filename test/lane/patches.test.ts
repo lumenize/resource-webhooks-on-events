@@ -57,20 +57,35 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(byUri.get('tickets/ticket-2')).toEqual({ uri: `${lane.root}/tickets/ticket-2`, effect: 'deleted', revision: gone.revision } satisfies CollectionChange);
   });
 
-  it("R19: brings contents to a catch-up that lists no format, or only formats A doesn't send, and where a patch is no smaller", async () => {
+  it("R19: brings contents to a catch-up that lists no format, or only formats A doesn't send, and where contents are shorter than the patch", async () => {
     const lane = newLane(layout);
     const opened = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
-    const other = await create(lane, 'tickets/ticket-4', { title: 'a', status: 'open' });
+    await create(lane, 'tickets/ticket-9', { title: 'Printer jams, first', status: 'open' });
+    const other = await create(lane, 'tickets/ticket-4', { title: 'a', status: 'closed', duplicateOf: 'ticket-9', duplicatedBy: ['ticket-1'] });
     const from = (await timelines(lane))[TICKETS(layout)].latest;
     await update(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'closed' }, opened.revision);
     for (const extra of [{}, { patchMimeTypes: [] }, { patchMimeTypes: ['application/json-patch+json'] }]) {
       const [entry] = (await catchUp(lane, 'tickets/{id}', from, extra)).changes;
       expect({ extra, contents: 'contents' in entry, patch: 'patch' in entry }).toEqual({ extra, contents: true, patch: false });
     }
-    // Every member of ticket-4 changes, so its patch would be as long as its contents.
-    await update(lane, 'tickets/ticket-4', { title: 'b', status: 'closed' }, other.revision);
+    // Dropping two members takes a patch longer than ticket-4's contents after it.
+    await update(lane, 'tickets/ticket-4', { title: 'a', status: 'closed' }, other.revision);
     const four = (await catchUp(lane, 'tickets/{id}', from, MERGE)).changes.find(({ uri }) => uri.endsWith('/ticket-4'))!;
+    expect(JSON.stringify({ duplicateOf: null, duplicatedBy: null }).length).toBeGreaterThan(JSON.stringify({ title: 'a', status: 'closed' }).length);
     expect({ contents: 'contents' in four, patch: 'patch' in four }).toEqual({ contents: true, patch: false });
+  });
+
+  it('R19: brings a patch no shorter than the contents, and the empty patch for a change only to whitespace', async () => {
+    const lane = newLane(layout);
+    const opened = await create(lane, 'tickets/ticket-4', { title: 'a', status: 'open' });
+    const spaced = await create(lane, 'tickets/ticket-5', { title: 'Printer jams', status: 'open' });
+    const from = (await timelines(lane))[TICKETS(layout)].latest;
+    // Every member of ticket-4 changes, so its patch is as long as its contents.
+    await update(lane, 'tickets/ticket-4', { title: 'b', status: 'closed' }, opened.revision);
+    await update(lane, 'tickets/ticket-5', '{ "title": "Printer jams", "status": "open" }', spaced.revision);
+    const byUri = new Map((await catchUp(lane, 'tickets/{id}', from, MERGE)).changes.map((entry) => [entry.uri.slice(lane.root.length + 1), entry]));
+    expect(byUri.get('tickets/ticket-4')).toMatchObject({ patch: { title: 'b', status: 'closed' } });
+    expect(byUri.get('tickets/ticket-5')).toMatchObject({ patchMimeType: 'application/merge-patch+json', patch: {} });
   });
 
   it('R19, R21: brings ticket-5 as contents once its revision at from has lost its contents to the prune', async () => {

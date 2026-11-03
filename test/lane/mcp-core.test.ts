@@ -34,12 +34,15 @@ async function refusal(promise: Promise<unknown>): Promise<{ status: number; cod
 }
 
 describe('the core methods', () => {
-  it("discovers one protocol version, resources and the strawman's resource operations, and no tools, since A has none of its own", async () => {
+  it("discovers one protocol version, resources, the strawman's operations, Events and the extension (R20), and no tools, since A has none of its own", async () => {
     const lane = newLane();
     expect(await lane.client.request('server/discover')).toEqual({
       resultType: 'complete',
       supportedVersions: ['2026-07-28'],
-      capabilities: { resources: {}, extensions: { 'io.modelcontextprotocol/resource-operations': {} } },
+      capabilities: {
+        resources: {},
+        extensions: { 'io.modelcontextprotocol/resource-operations': {}, 'io.modelcontextprotocol/events': {}, 'io.modelcontextprotocol/resource-webhooks': {} },
+      },
       ttlMs: 0,
       cacheScope: 'public',
       _meta: META,

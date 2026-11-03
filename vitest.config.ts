@@ -37,6 +37,8 @@ export default defineConfig({
       lane('lane-paged', ['test/lane-paged/**/*.test.ts'], { ...BINDINGS, OPERATOR_TOKEN: 'test-operator-token-for-the-lane-only', PAGE_SIZE: '1' }),
       // Three rows scanned and 100 bytes of contents to a page, so a test reaches each limit.
       lane('lane-limits', ['test/lane-limits/**/*.test.ts'], { ...BINDINGS, OPERATOR_TOKEN: 'test-operator-token-for-the-lane-only', SCAN_LIMIT: '3', PAGE_BYTES: '100' }),
+      // An event body that holds one change-set entry and not two, so a test sees one left out.
+      lane('lane-body-limit', ['test/lane-body-limit/**/*.test.ts'], { ...BINDINGS, OPERATOR_TOKEN: 'test-operator-token-for-the-lane-only', EVENT_BODY_LIMIT: '600' }),
       // One change to a moment, so a cascade's moment is too large for a catch-up.
       lane('lane-moment-cap', ['test/lane-moment-cap/**/*.test.ts'], { ...BINDINGS, OPERATOR_TOKEN: 'test-operator-token-for-the-lane-only', MOMENT_CHANGE_CAP: '1' }),
       // The deployed tier, over the network, only when scripts/deployed.mjs has deployed one.

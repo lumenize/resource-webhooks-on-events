@@ -62,9 +62,12 @@ const NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
 ]);
 
 const EVENTS = 'io.modelcontextprotocol/events';
+const RESOURCE_WEBHOOKS = 'io.modelcontextprotocol/resource-webhooks';
 
 // The extension each of these methods belongs to, which the server must have declared.
 const EXTENSION_OF: ReadonlyMap<string, string> = new Map([
+  ['resources/collection/read', RESOURCE_WEBHOOKS],
+  ['resources/collection/catchup', RESOURCE_WEBHOOKS],
   ['events/list', EVENTS],
   ['events/subscribe', EVENTS],
   ['events/unsubscribe', EVENTS],

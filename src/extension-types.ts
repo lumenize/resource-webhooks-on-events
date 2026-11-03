@@ -1,8 +1,7 @@
-// The extension's types, written in the style of the spec's schema.ts. They start with the
-// Filesystems strawman's resource operations, which A serves, as this extension amends them:
-// every change-set entry carries `revision`, a deletion's included (R7). Later phases add the
-// extension's own methods and event. `npm run generate:schema` writes their JSON Schema to
-// extension-types.schema.json.
+// The extension's types, written in the style of the spec's schema.ts: the Filesystems strawman's
+// resource operations, which A serves, as this extension amends them, since every change-set
+// entry carries `revision`, a deletion's included (R7), and the extension's own two methods and
+// event. `npm run generate:schema` writes their JSON Schema to extension-types.schema.json.
 import type {
   BlobResourceContents,
   CacheableResult,
@@ -15,6 +14,15 @@ import type {
   Result,
   TextResourceContents,
 } from './vendor/mcp-spec/2026-07-28/schema';
+
+/**
+ * The extension's provisional identifier, a key in `capabilities.extensions`, which commits a
+ * server to its two methods and to listing its event with webhook delivery (R20).
+ */
+export const RESOURCE_WEBHOOKS_EXTENSION = 'io.modelcontextprotocol/resource-webhooks';
+
+/** The extension's event, one for each change on each subscription covering a resource it touched (R10, D19). */
+export const COLLECTION_UPDATED = 'mcp.resource.collection.updated';
 
 /** The strawman's provisional identifier, a key in `capabilities.extensions`, which commits a server to its four methods. */
 export const RESOURCE_OPERATIONS_EXTENSION = 'io.modelcontextprotocol/resource-operations';
@@ -132,7 +140,7 @@ export interface ReadCollectionResult extends PaginatedResult, CacheableResult {
 export interface CatchUpCollectionRequestParams extends RequestParams, UriSpecification {
   /** The moment the client is caught up to. */
   from: string;
-  /** The patch formats the client applies, by media type, in its order of preference (R19). */
+  /** The patch formats the client applies, by media type (R19). */
   patchMimeTypes?: string[];
 }
 
@@ -167,4 +175,13 @@ export interface CatchUpCollectionResult extends Result {
   nextFrom: string;
   /** How long a client that polls waits before its next catch-up, in milliseconds (D12). */
   nextPollMs: number;
+}
+
+/** An `mcp.resource.collection.updated` occurrence's `data`: the subscription's uri-specification, and the change (R10). */
+export interface CollectionUpdatedData extends UriSpecification {
+  /**
+   * The change's change-set entries for the resources the subscription covers, left out when they
+   * would take the delivery past the size SEP-3415 asks for.
+   */
+  changes?: ChangeSetEntry[];
 }

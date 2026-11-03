@@ -27,12 +27,17 @@ export const NEXT_POLL_MS = 30_000;
 
 /**
  * How far one page of a read, or one catch-up, goes before it stops. A catch-up stops only once
- * a moment is done, so it may run past any of the first three to finish one (R14).
+ * a moment is done and every resource it keeps still has its contents there, so it may run past
+ * any of the first three (R14, R21). It counts each resource's contents, whether it then sends
+ * them or a patch.
  */
 export interface CollectionLimits {
-  /** How many resources one result carries at most. */
+  /** How many resources one result carries, past which it stops. */
   pageSize: number;
-  /** How many rows one result scans at most, the collection's or not. */
+  /**
+   * How many rows one result scans at most, the collection's or not: each resource's newest row
+   * for a read, and every row for a catch-up.
+   */
   scanLimit: number;
   /** How many bytes of contents one result carries before it stops, in UTF-8. */
   pageBytes: number;
@@ -81,7 +86,7 @@ export class ResourceWebhooks {
   read(params: ReadCollectionRequestParams): ReadCollectionResult {
     const coverage = this.#coverage(params);
     const { store, limits } = this.#options;
-    const position = params.cursor === undefined ? { nextFrom: store.latest(coverage.timeline), after: '' } : this.#position(params.cursor, coverage.timeline);
+    const position = params.cursor === undefined ? { nextFrom: store.latest(coverage.timeline), after: '' } : this.#position(params.cursor, coverage);
     const rows = store.newestInPathOrder(coverage.timeline, position.after, coverage.prefix, limits.scanLimit);
     const contents: TextResourceContents[] = [];
     let bytes = 0;
@@ -163,10 +168,19 @@ export class ResourceWebhooks {
     return { rows: [...kept.values()] };
   }
 
+  /**
+   * Which paths the uri-specification covers, as a subscription names it, with the refusals a
+   * catch-up naming it would get (R18).
+   */
+  covers(named: UriSpecification): (path: string) => boolean {
+    return this.#coverage(named).covers;
+  }
+
   // One resource's change from `from`: created if it did not exist then, deleted if it is gone
   // now, else updated, with its revision at `from` as `previousRevision`. A change but a deletion
   // carries a merge patch from the contents at `previousRevision` when the catch-up lists merge
-  // patches, A still keeps those contents and the patch is the smaller, and its contents otherwise (R19).
+  // patches and A still keeps those contents, unless the contents are shorter, or no merge patch
+  // can write the change, and carries its contents otherwise (R19).
   #change(row: Row, from: string, patches: boolean): CollectionChange {
     const before = this.#options.store.asOf(row.path, from);
     const existed = before !== undefined && !before.deleted;
@@ -177,8 +191,10 @@ export class ResourceWebhooks {
     const text = row.contents!;
     if (patches && existed && before.contents !== null) {
       const change = diff(JSON.parse(before.contents) as JsonValue, JSON.parse(text) as JsonValue);
-      if (change.kind === 'patch' && utf8Length(JSON.stringify(change.patch)) < utf8Length(text)) {
-        return { ...entry, patchMimeType: MERGE_PATCH_MIME_TYPE, patch: change.patch };
+      // A change only to whitespace is the empty patch, since a merge patch patches parsed text.
+      const patch = change.kind === 'same' ? {} : change.kind === 'patch' ? change.patch : undefined;
+      if (patch !== undefined && utf8Length(text) >= utf8Length(JSON.stringify(patch))) {
+        return { ...entry, patchMimeType: MERGE_PATCH_MIME_TYPE, patch };
       }
     }
     return { ...entry, contents: { uri, mimeType: 'application/json', text } };
@@ -191,17 +207,19 @@ export class ResourceWebhooks {
   // What the named uri-specification covers, or `notFound` when no listed one covers it (R13,
   // R24). Naming both or neither is refused before anything is read.
   #coverage({ uri, uriTemplate }: UriSpecification): Coverage {
-    if ((uri === undefined) === (uriTemplate === undefined)) throw new JsonRpcError(INVALID_PARAMS, 'Name exactly one of uri and uriTemplate');
+    // Each refusal's `data` names what the request named, as its notFound does.
+    const named = { ...(uri === undefined ? {} : { uri }), ...(uriTemplate === undefined ? {} : { uriTemplate }) };
+    if ((uri === undefined) === (uriTemplate === undefined)) throw new JsonRpcError(INVALID_PARAMS, 'Name exactly one of uri and uriTemplate', named);
     const { store, root, map } = this.#options;
     if (uri !== undefined) {
-      if (utf8Length(uri) > MAX_NAMED_URI_BYTES) throw new JsonRpcError(INVALID_PARAMS, `The uri is longer than ${MAX_NAMED_URI_BYTES} bytes`);
+      if (utf8Length(uri) > MAX_NAMED_URI_BYTES) throw new JsonRpcError(INVALID_PARAMS, `The uri is longer than ${MAX_NAMED_URI_BYTES} bytes`, named);
       const path = uri.startsWith(`${root}/`) ? uri.slice(root.length + 1) : undefined;
       const timeline = path === undefined ? undefined : store.timelineOf(path);
       if (path === undefined || !timeline) throw notFound({ uri });
       return { named: { uri }, timeline, covers: (candidate) => candidate === path, prefix: path };
     }
     const template = uriTemplate!;
-    if (utf8Length(template) > MAX_NAMED_TEMPLATE_BYTES) throw new JsonRpcError(INVALID_PARAMS, `The uriTemplate is longer than ${MAX_NAMED_TEMPLATE_BYTES} bytes`);
+    if (utf8Length(template) > MAX_NAMED_TEMPLATE_BYTES) throw new JsonRpcError(INVALID_PARAMS, `The uriTemplate is longer than ${MAX_NAMED_TEMPLATE_BYTES} bytes`, named);
     const relative = template.startsWith(`${root}/`) ? template.slice(root.length + 1) : undefined;
     const covers = relative === undefined ? undefined : templateMatcher(relative);
     const listed = covers && Object.entries(map.listed).find(([specification]) => specification.includes('{') && templateCovers(specification, relative!));
@@ -209,8 +227,10 @@ export class ResourceWebhooks {
     return { named: { uriTemplate: template }, timeline: listed[1], covers, prefix: literalPrefix(relative!) };
   }
 
-  // The position a cursor A issued names, on this timeline, or `Invalid cursor`.
-  #position(cursor: string, timeline: string): Position {
+  // The position a cursor names, or `Invalid cursor` for one that doesn't parse or names a moment
+  // past the timeline's latest. A cursor from another collection parses too, and misleads only
+  // the client that sent it, since every page brings resources at `nextFrom` or later.
+  #position(cursor: string, coverage: Coverage): Position {
     let position: Partial<Position> | undefined;
     try {
       position = JSON.parse(new TextDecoder().decode(fromBase64url(cursor))) as Partial<Position>;
@@ -218,8 +238,8 @@ export class ResourceWebhooks {
       position = undefined;
     }
     const { nextFrom, after } = position ?? {};
-    if (typeof nextFrom !== 'string' || typeof after !== 'string' || !isMoment(nextFrom) || nextFrom > this.#options.store.latest(timeline)) {
-      throw new JsonRpcError(INVALID_PARAMS, 'Invalid cursor');
+    if (typeof nextFrom !== 'string' || typeof after !== 'string' || !isMoment(nextFrom) || nextFrom > this.#options.store.latest(coverage.timeline)) {
+      throw new JsonRpcError(INVALID_PARAMS, 'Invalid cursor', coverage.named);
     }
     return { nextFrom, after };
   }

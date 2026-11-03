@@ -87,7 +87,7 @@
                     "type": "string"
                 },
                 "patchMimeTypes": {
-                    "description": "The patch formats the client applies, by media type, in its order of preference (R19).",
+                    "description": "The patch formats the client applies, by media type (R19).",
                     "items": {
                         "type": "string"
                     },
@@ -275,6 +275,28 @@
                 "revision",
                 "uri"
             ],
+            "type": "object"
+        },
+        "CollectionUpdatedData": {
+            "description": "An `mcp.resource.collection.updated` occurrence's `data`: the subscription's uri-specification, and the change (R10).",
+            "properties": {
+                "changes": {
+                    "description": "The change's change-set entries for the resources the subscription covers, left out when they\nwould take the delivery past the size SEP-3415 asks for.",
+                    "items": {
+                        "$ref": "#/$defs/ChangeSetEntry"
+                    },
+                    "type": "array"
+                },
+                "uri": {
+                    "description": "A uri, a collection of one.",
+                    "format": "uri",
+                    "type": "string"
+                },
+                "uriTemplate": {
+                    "description": "A uriTemplate the server lists, or one a template it lists covers (R24).",
+                    "type": "string"
+                }
+            },
             "type": "object"
         },
         "CreateResourceRequest": {
