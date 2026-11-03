@@ -25,7 +25,8 @@
     "GATEWAY_INSTANCE": "B",
     // How many clients may register with A's authorization server between Wipes.
     "REGISTRATION_CAP": "1000",
-    // How long A keeps a superseded version, or a deletion, before a later write prunes it.
+    // How long A keeps a superseded revision's contents, and a deletion, before a later write
+    // prunes them (R21).
     "CUTOFF_WINDOW_MS": "86400000",
     // The delays between A's delivery attempts, held to SEP-3415's bounds of 3 to 5 attempts
     // over at most 15 minutes.

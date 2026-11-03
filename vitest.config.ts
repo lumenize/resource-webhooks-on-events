@@ -21,7 +21,7 @@ const BINDINGS = {
 function lane(name: string, include: string[], bindings: Record<string, string>) {
   return {
     plugins: [cloudflareTest({ wrangler: { configPath: './wrangler.jsonc' }, miniflare: { bindings } })],
-    // Level 1's tests watch real retries and heartbeats for a few seconds each.
+    // B's tests, and later A's deliveries, watch real retries and heartbeats for a few seconds each.
     test: { name, include, setupFiles: ['./test/lane/setup.ts'], testTimeout: 15_000 },
   };
 }
@@ -37,7 +37,7 @@ export default defineConfig({
       ...(process.env.DEPLOYED_ORIGIN
         ? [
             {
-              // One file at a time, since Scenario 2's Wipe would end another file's sign-ins mid-run.
+              // One file at a time, since one file's Wipe would end another file's sign-ins mid-run.
               test: { name: 'deployed', environment: 'node', include: ['test/deployed/**/*.test.ts'], fileParallelism: false, testTimeout: 120_000, hookTimeout: 120_000 },
             },
           ]
