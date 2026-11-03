@@ -49,7 +49,7 @@ describe('the core methods', () => {
   it('serves no tool methods, and lists no resources or templates, until a host adds some', async () => {
     const lane = newLane();
     for (const method of ['tools/list', 'tools/call']) {
-      const refused = await refusal(lane.client.request(method, method === 'tools/call' ? { name: 'write_note', arguments: {} } : {}));
+      const refused = await refusal(lane.client.request(method, method === 'tools/call' ? { name: 'any_tool', arguments: {} } : {}));
       expect({ method, status: refused.status, code: refused.code }).toEqual({ method, status: 404, code: -32601 });
     }
     expect(await lane.client.request('resources/list')).toMatchObject({ resources: [] });
@@ -169,7 +169,7 @@ describe('the transport', () => {
     // The header matches, so the request reaches the method, which serves nothing at the URI.
     const response = await post(lane, { jsonrpc: '2.0', id: 3, method: 'resources/read', params: { uri, _meta: ENVELOPE } }, headersFor('resources/read', encoded));
     expect(await response.json()).toMatchObject({ error: { code: -32602, message: 'Resource not found' } });
-    expect(headerValue('Buy milk ')).toBe(`=?base64?${btoa('Buy milk ')}?=`);
+    expect(headerValue('Printer jams ')).toBe(`=?base64?${btoa('Printer jams ')}?=`);
     expect(headerValue(uri)).toBe(uri);
   });
 

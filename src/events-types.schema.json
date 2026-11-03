@@ -619,18 +619,6 @@
             ],
             "type": "object"
         },
-        "ResourceUpdatedData": {
-            "description": "What `mcp.resource.updated` carries in `data`, and takes as `arguments`: the resource's URI.",
-            "properties": {
-                "uri": {
-                    "type": "string"
-                }
-            },
-            "required": [
-                "uri"
-            ],
-            "type": "object"
-        },
         "ResultMetaObject": {
             "description": "Extends {@link MetaObject} with additional result-specific fields. All key naming rules from `MetaObject` apply.",
             "properties": {

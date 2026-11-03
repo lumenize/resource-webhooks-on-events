@@ -59,7 +59,7 @@ function jsonc(text) {
 
 const configText = readFileSync('wrangler.jsonc', 'utf8');
 const { vars } = jsonc(configText);
-// The account's workers.dev subdomain, from the demo's own origin, as `transformation.workers.dev`.
+// The account's workers.dev subdomain, from the Worker's own origin, as `transformation.workers.dev`.
 const subdomain = new URL(vars.ORIGIN).host.split('.').slice(1).join('.');
 const origin = `https://${name}.${subdomain}`;
 

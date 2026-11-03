@@ -2,7 +2,7 @@
 // The command the conformance suite's client scenarios drive: it runs `src/client/mcp-client.ts`
 // against the server URL the suite appends, signing in when the server asks, listing tools, and
 // calling one, `add_numbers` where the scenario offers it. An Events scenario instead subscribes
-// and refreshes as level 1's `b` does, though with no gateway, since the suite never delivers.
+// and refreshes as `b` does in the tests, though with no gateway, since the suite never delivers.
 // Node strips the modules' types itself.
 import { createMcpClient, OAuthSession } from '../src/client/mcp-client.ts';
 import { newSecret } from '../src/standard-webhooks.ts';

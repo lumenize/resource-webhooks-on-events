@@ -1,4 +1,4 @@
-// The page's back channel to A and B, which the demo watches and the tests listen on. Reports
+// The page's back channel to A and B, which the tests listen on and the demo will watch. Reports
 // are redacted at the source, and a control is obeyed only with the operator token, which is
 // compared in constant time and never reported. A control itself is never reported either.
 import { redact } from './redact';

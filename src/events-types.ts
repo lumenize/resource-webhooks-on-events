@@ -1,6 +1,6 @@
 // The Events extension's types, as SEP-3415 at commit b08e4f9 defines them in prose, written in
-// the style of the spec's schema.ts, since the SEP ships no TypeScript. Only what level 1 uses
-// is here. `npm run generate:schema` writes their JSON Schema to events-types.schema.json.
+// the style of the spec's schema.ts, since the SEP ships no TypeScript. Only what this extension
+// uses is here. `npm run generate:schema` writes their JSON Schema to events-types.schema.json.
 import type {
   Cursor,
   JSONRPCRequest,
@@ -139,7 +139,3 @@ export interface VerificationEnvelope {
   challenge: string;
 }
 
-/** What `mcp.resource.updated` carries in `data`, and takes as `arguments`: the resource's URI. */
-export interface ResourceUpdatedData {
-  uri: string;
-}

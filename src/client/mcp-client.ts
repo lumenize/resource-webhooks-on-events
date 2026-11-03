@@ -57,12 +57,9 @@ const NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ['events/unsubscribe', ['name']],
   ['events/poll', ['name']],
   ['events/stream', ['name']],
-  ['resources/webhooks/subscribe', ['uri', 'uriTemplate']],
-  ['resources/webhooks/unsubscribe', ['uri', 'uriTemplate']],
 ]);
 
 const EVENTS = 'io.modelcontextprotocol/events';
-const RESOURCE_WEBHOOKS = 'io.modelcontextprotocol/resource-webhooks';
 
 // The extension each of these methods belongs to, which the server must have declared.
 const EXTENSION_OF: ReadonlyMap<string, string> = new Map([
@@ -71,8 +68,6 @@ const EXTENSION_OF: ReadonlyMap<string, string> = new Map([
   ['events/unsubscribe', EVENTS],
   ['events/poll', EVENTS],
   ['events/stream', EVENTS],
-  ['resources/webhooks/subscribe', RESOURCE_WEBHOOKS],
-  ['resources/webhooks/unsubscribe', RESOURCE_WEBHOOKS],
 ]);
 
 /** A method the client would not call, since the server has not declared its extension. */

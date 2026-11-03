@@ -132,22 +132,44 @@ describe('tokens at the edge', () => {
     expect((await discover(lane, await lane.token())).status).toBe(200);
   });
 
-  it('treats a request that sets the claims header itself, with no token, as anonymous', async () => {
+  it('strips a claims header a caller sets itself, so A never sees one the edge did not verify', async () => {
     const lane = newLane();
     const spoofed = { 'x-rw-principal': JSON.stringify({ sub: 'someone', epoch: 0 }) };
     expect((await discover(lane, undefined, spoofed)).status).toBe(401);
     expect((await discover(lane, 'nonsense', spoofed)).status).toBe(401);
+    // The authorization endpoint reaches A with no token, so it shows what A is handed.
+    const seen: (string | null)[] = [];
+    const recording = new Proxy(env.SERVER, {
+      get(target, property) {
+        if (property !== 'getByName') return Reflect.get(target, property);
+        return (name: string) => ({
+          fetch: (request: Request) => {
+            seen.push(request.headers.get('x-rw-principal'));
+            return target.getByName(name).fetch(request);
+          },
+        });
+      },
+    });
+    const response = await callWorker(new Request(`${env.ORIGIN}/authorize?client_id=nobody`, { headers: spoofed }), { ...lane.env, SERVER: recording });
+    expect(response.status).toBe(400);
+    expect(seen).toEqual([null]);
   });
 
-  it('refuses a token issued before a Wipe, which only A can tell', async () => {
+  it('refuses a token issued before a Wipe, which only A can tell, and takes one issued after it', async () => {
     const lane = newLane();
     const earlier = await lane.token();
     expect((await discover(lane, earlier)).status).toBe(200);
     const page = await watch(lane, 'A');
-    expect(await page.control('wipe')).toMatchObject({ type: 'done', action: 'wipe' });
+    expect(await page.control('wipe')).toEqual({ type: 'done', action: 'wipe', epoch: 1 });
     const response = await discover(lane, earlier);
     expect(await response.json()).toEqual({ error: 'invalid_token', error_description: 'The token was issued before the last Wipe' });
     expect(response.status).toBe(401);
+    // A sign-in after the Wipe, which registers again since the Wipe ended the old client id.
+    const later = await lane.session.tokenFor(`${lane.root}/mcp`, null, { refresh: true });
+    expect((await discover(lane, later)).status).toBe(200);
+    // Each Wipe raises the count by one.
+    expect(await page.control('wipe')).toEqual({ type: 'done', action: 'wipe', epoch: 2 });
+    expect((await discover(lane, later)).status).toBe(401);
   });
 });
 

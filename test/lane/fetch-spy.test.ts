@@ -29,8 +29,8 @@ it("routes a fetch to the A it names, and refuses one that names no lane's A", a
   const first = newLane();
   newLane();
 
-  // The first lane's edge still routes to its own A after a second lane exists, as a late retry
-  // would be: the method is wrong for the path, which only the A the edge names answers with 405.
+  // A fetch for the first lane's A still gets that lane's env after a second lane exists, as a
+  // late retry would: the edge answers the wrong method with 405 only on the instance it names.
   const late = await fetch(`${first.root}/mcp`);
   expect({ status: late.status, allow: late.headers.get('Allow') }).toEqual({ status: 405, allow: 'POST' });
   await expect(fetch(`${first.root.replace(first.name, 'A-gone')}/mcp`)).rejects.toThrow('No lane is listening');

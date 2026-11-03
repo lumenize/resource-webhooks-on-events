@@ -10,7 +10,7 @@ export interface AuthorizationServerOptions {
   secret: string;
   /** The Worker's origin, the issuer, as `https://….workers.dev`. */
   origin: string;
-  /** A's epoch now, so a Wipe invalidates every client id and token issued before it. */
+  /** A's Wipe count now, so a Wipe ends every client id issued before it, and A refuses every earlier token. */
   epoch: () => number;
   /** The resources a client may get a token for, as A's MCP endpoint and its own socket on B. */
   resourcesFor: (clientId: string) => readonly string[];

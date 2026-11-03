@@ -40,6 +40,17 @@ describe('with CONFORMANCE set', () => {
     expect((await call(server, 'localhost:8788', 'server/discover')).status).toBe(200);
   });
 
+  it("calls a host's tool, refuses one it lacks, and reads a host's resource and template", async () => {
+    const called = await call(server, 'localhost:8788', 'tools/call', { name: 'test_simple_text', arguments: {} }, { 'Mcp-Name': 'test_simple_text' });
+    expect(await called.json()).toMatchObject({ result: { content: [{ type: 'text' }] } });
+    const unknown = await call(server, 'localhost:8788', 'tools/call', { name: 'paint_ticket', arguments: {} }, { 'Mcp-Name': 'paint_ticket' });
+    expect(await unknown.json()).toMatchObject({ error: { code: -32602, message: 'Unknown tool: paint_ticket' } });
+    for (const uri of ['test://static-text', 'test://template/7/data']) {
+      const read = await call(server, 'localhost:8788', 'resources/read', { uri }, { 'Mcp-Name': uri });
+      expect({ uri, result: ((await read.json()) as { result?: { contents: { uri: string }[] } }).result?.contents[0].uri }).toEqual({ uri, result: uri });
+    }
+  });
+
   it('serves nothing on any other host', async () => {
     const response = await toolsList(server, 'resource-webhooks-on-events.transformation.workers.dev');
     expect(response.status).toBe(403);

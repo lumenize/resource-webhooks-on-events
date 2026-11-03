@@ -5,7 +5,7 @@ import { Webhook } from 'standardwebhooks';
 import { describe, expect, it } from 'vitest';
 import { deliveryHeaders, newSecret, secretBytes, sign, verify } from '../../src/standard-webhooks';
 
-const BODY = '{"eventId":"evt_e0.1","name":"mcp.resource.updated","timestamp":"2026-10-21T14:05:00Z","data":{"uri":"https://x/notes/inbox/note-42"},"cursor":null}';
+const BODY = '{"eventId":"108","name":"mcp.resource.collection.updated","timestamp":"2026-11-03T16:00:00.000Z","data":{"uriTemplate":"https://x/tickets/{id}"},"cursor":null}';
 
 describe('Standard Webhooks', () => {
   it("signs so that the package's verifier accepts it", async () => {
@@ -22,7 +22,7 @@ describe('Standard Webhooks', () => {
     const headers = new Headers({ 'webhook-id': 'msg_1', 'webhook-timestamp': String(now), 'webhook-signature': signature });
     const bytes = new TextEncoder().encode(BODY);
     expect(await verify([secret], headers, bytes, now)).toBe('verified');
-    expect(await verify([secret], headers, new TextEncoder().encode(BODY.replace('42', '43')), now)).toBe('failed');
+    expect(await verify([secret], headers, new TextEncoder().encode(BODY.replace('108', '109')), now)).toBe('failed');
     expect(await verify([newSecret()], headers, bytes, now)).toBe('failed');
     expect(await verify([secret], headers, bytes, now + 6 * 60)).toBe('stale');
   });
@@ -38,7 +38,8 @@ describe('Standard Webhooks', () => {
   it('takes a secret only as whsec_ and the base64 of 24 to 64 bytes', () => {
     const of = (bytes: number) => `whsec_${btoa(String.fromCharCode(...new Uint8Array(bytes)))}`;
     expect([23, 24, 64, 65].map((bytes) => Boolean(secretBytes(of(bytes))))).toEqual([false, true, true, false]);
-    expect(secretBytes(of(32).replace('whsec_', 'wh_'))).toBeUndefined();
+    // A prefix as long as whsec_, so only the prefix check can refuse what follows it.
+    expect(secretBytes(of(32).replace('whsec_', 'wrong_'))).toBeUndefined();
     expect(secretBytes('whsec_not base64!')).toBeUndefined();
   });
 });

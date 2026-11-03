@@ -7,20 +7,20 @@ import { expect, it } from 'vitest';
 
 const ROOT = process.env.SCAN_ROOT ?? join(import.meta.dirname, '../..');
 const THIS_FILE = 'test/harness/left-behind.test.ts';
-const ROOT_FILES = ['package.json', 'package-lock.json', 'wrangler.jsonc', 'wrangler.conformance.jsonc', 'vitest.config.ts', 'tsconfig.json', '.dev.vars.example', 'conformance-baseline.yml'];
+const ROOT_FILES = ['package.json', 'package-lock.json', 'wrangler.jsonc', 'wrangler.conformance.jsonc', 'vitest.config.ts', 'tsconfig.json', 'worker-configuration.d.ts', '.nvmrc', '.dev.vars.example', '.gitignore', 'conformance-baseline.yml'];
 
 // Each name as code refers to it, so prose that mentions one in passing does not count.
 const LEFT_BEHIND: Record<string, RegExp> = {
   'notes-http': /notes-http/,
-  targets: /\/targets(\.ts)?['"]/,
+  targets: /\/targets(\.[jt]s)?['"]/,
   'tool-types': /tool-types/,
   'resource-webhooks-types': /resource-webhooks-types/,
-  'src/page': /src\/page/,
+  'src/page': /src\/page|\.\/page\/page|\/js\/page/,
   'tsconfig.page': /tsconfig\.page/,
   'build:page': /build:page/,
-  './public': /\.\/public/,
-  playwright: /"playwright"|node_modules\/playwright/,
-  'the (notes|lists) route': /\(notes\|lists\)/,
+  './public': /\.\/public|"directory": "public"|public\/js/,
+  playwright: /["']playwright["']|node_modules\/playwright/,
+  'the notes and lists routes': /\(notes\|lists\)|\/notes\/inbox|\/lists\/list-/,
 };
 
 function filesUnder(directory: string): string[] {

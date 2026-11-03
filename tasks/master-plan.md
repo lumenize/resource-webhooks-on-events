@@ -665,13 +665,23 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 ### Phase 1
 
-**For Larry.** Nothing needs a decision. Two things differ from the phase as written. `src/server-role/deliveries.ts` waits for Phase 6, since A sends nothing until then and `src/server.ts` no longer builds a `send`, and the phase text now says so. B's event-free tests went into `test/lane/gateway.test.ts`, with the page controls' event-free tests beside them (the greeting, the refusals, and B's Wipe closing every socket).
+**For Larry.** Nothing needs a decision. Four things differ from the phase as written, none of them a design change:
+
+- `src/server-role/deliveries.ts` waits for Phase 6, since A sends nothing until then and `src/server.ts` no longer builds a `send`, and the phase text now says so.
+- B's event-free tests went into `test/lane/gateway.test.ts`, with the page controls' event-free tests beside them (the greeting, the refusals, and B's Wipe closing every socket).
+- Without a host's tools, A serves no `tools/*` method at all, not only no `tools` declaration, so `tools/list` answers `-32601` there.
+- `src/mcp-http.ts` and `src/client/mcp-client.ts` came in with their `resources/webhooks/*` entries already dropped.
+
+A residual to know of: a socket token from before a Wipe of A still opens a socket on B, since B never reads A's Wipe count. A's Wipe refuses every earlier MCP token, and B's own Wipe closes every socket.
 
 **Retro.**
 
 - The carried code was close to standing alone: once the left-behind imports went, the server role was cut to MCP's core, and `server.ts` read a Wipe count from its own storage, 248 of the 249 carried tests passed on the first run.
 - The one failure was a flaw the first flavor's `edge.test.ts` already had: its case probe upper-cased the lane's name, which is unchanged when the random suffix is all digits. The probe now lower-cases the `A`.
 - A mutation loop in zsh first reported every mutation as surviving, because an unquoted `$M` holding a command with spaces is one word, so nothing ran. Lumenize's `scripts/mutate.mjs` was right each time; the loop around it was wrong.
+- One mutation was first recorded as caught when its test file was already red, from an edit to that test's fixture. A mutation check proves nothing without a green baseline, so each one now runs on a target file the suite has just passed.
+- A carried test was weaker than it looked: `standard-webhooks.test.ts` refused a `wh_` secret prefix, which fails whether or not the prefix is checked, since slicing six characters breaks the base64 after it. A wrong prefix as long as `whsec_` now does the job.
+- The verifier found three gaps, all now closed: `edge.test.ts` had lost its metadata-route and same-origin CORS probes; the Wipe test passed even if every token after a Wipe were refused, and now signs in again after it and watches the count rise; and the spoofed-claims test could not fail, and now watches what A is handed.
 
 **Mutation checks**, each run with Lumenize's `scripts/mutate.mjs`, each turning exactly the test named red:
 
@@ -682,8 +692,10 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - B skipping signature verification: two `gateway.test.ts` tests.
 - The conformance build giving subscribes a token, and the role dropping a host's tools: one `conformance-build.test.ts` test each.
 - The fetch spy routing by the file's env, the controls accepting any token, and `CONFORMANCE` in `wrangler.jsonc`: `fetch-spy.test.ts`, `lane-closed/controls.test.ts` and `build-checks.test.ts`.
+- One more per carried file the first round missed: a secret without its prefix (`standard-webhooks.test.ts`), the validator finding nothing (`spec-examples.test.ts`), the client skipping its PKCE check (`oauth-client.test.ts`), `__proto__` assigned rather than defined (`merge-patch.test.ts`), header values left untrimmed (`raw-http.test.ts`), and the schema check never stale (`schema-check.test.ts`).
+- For the verifier's fixes: the edge keeping a caller's claims header, the metadata routes taking any method, the Wipe count frozen at 0, and the role renaming its unknown-tool error, each turning its new test red.
 
-**Close-out.** The suite is 250 tests in 15 files, all passing. `npm install` warns that npm 11 skipped the install scripts of `esbuild`, `fsevents` and `workerd`, and every lane and harness test runs regardless. The token endpoint's tests log a workerd warning that a form body is read with `.text()`, as the first flavor's did.
+**Close-out.** The suite is 251 tests in 15 files, all passing. `npm install` warns that npm 11 skipped the install scripts of `esbuild`, `fsevents` and `workerd`, and every lane and harness test runs regardless. The token endpoint's tests log a workerd warning that a form body is read with `.text()`, as the first flavor's did.
 
 ## Notes kept out of the proposal
 

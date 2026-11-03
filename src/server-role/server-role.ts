@@ -57,7 +57,7 @@ export interface ServerRoleOptions {
 
 type Method = (params: Record<string, unknown>, principal: string | undefined) => Result | Promise<Result>;
 
-// Every read result answers ttlMs 0, so no cache serves a version older than one a delivery names.
+// Every read result answers ttlMs 0, so no cache serves a stale result.
 const UNCACHED = { ttlMs: 0, cacheScope: 'public' } as const;
 
 export class ServerRole {
