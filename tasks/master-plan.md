@@ -1052,6 +1052,41 @@ Choices the phase made where the task file left one open:
 - With these fixes and Phase 7's, the suite is 455 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test, and both conformance suites pass. The deployed tier passed its four tests with every change to code in, and only a comment and one harness test came after.
 
 **Close-out.** The suite is 443 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test. Both conformance suites pass, and the deployed tier passes its four tests on `test-resource-webhooks-on-events`. `src/` holds no `resources/webhooks/` method, no `'mcp.resource.updated'`, no `targets.ts` and no `notes-http.ts`.
+### Phase Retro
+
+**What we learned.**
+
+- Cloudflare's egress refuses A's document fetch exactly as it refuses A's webhook POSTs. Across 30 names the codes matched one for one, and the three addresses that time out on webhooks time out on the document fetch too, so A needs no SSRF check of its own for CIMD.
+- The deployed tier found two orderings the lane never showed: B's report of an event can reach the page after the event reaches the client, and the client logged an event's outcome before the catch-up it brings.
+- On the split layout one transaction gives two moments, so R4 stays as written and the split map breaks it on purpose (D10).
+- A merge patch can be as long as the contents it replaces, so a test of R19's choice between them needs a change smaller than the resource, in spaced JSON.
+
+**What we struggled with.**
+
+- Fixtures in the safe shape. The scan-limit test was confounded by the byte limit, R11's test had no copy later than an event's entry, and the patch test changed every member. Each mutation that survived pointed at its fixture, not at the code.
+- The client's queues. R8's move and R23's drop lost a copy only in an order no lane test arranged, and the verifier found it by feeding that order by hand.
+- The mutation loop, more than the tool. A refusal for non-unique text read as a survivor until the runner printed REFUSED, and a zsh loop with an unquoted command ran nothing.
+
+**Tests that failed unexpectedly**, by root cause:
+
+- Twenty writes at once each met a `401` and signed in on its own, which hit the account cap. The client now shares one sign-in per endpoint.
+- B's socket cap counted a socket that was still closing, and its test dropped the client ends it opened.
+- The lane's fake receivers ignored the abort signal once they had sent headers, which `fetch` does not, so a stalled document body hung the lane.
+- `watch` caught up before it subscribed, through the path a start-over takes.
+- A gate counts every POST, so a hold meant for a catch-up took the resend after a `401`.
+
+**Impact on follow-on work.**
+
+- Splitting the proposal out of this file can take the SSRF measurement as evidence that the document fetch needs no requirement of its own. It can also take the first residual, a catch-up that runs past every limit at a cost that grows as the square of its rows, as a question for R13 and R21's builder note.
+- The SDK reference implementation can take `src/client/copies.ts`'s rules as its client's model, and the harness's hand-fed orders as test cases.
+- A demo that changes a ticket's `duplicateOf` or deletes a ticket meets the cascade residual.
+- This repo has no backlog, so no row closes.
+
+**Process changes**, each a proposal, since the files live in `../lumenize`:
+
+- `/build-task`'s verifier prompt: for a client with queues that run concurrently, ask the verifier to model one interleaving by hand in a scratch script. That is how Phase 7's verifier found the lost copy, and code reading alone would not have.
+- `/build-task`'s mutation section: a mutation tool's refusal is no verdict, so a loop around it reports REFUSED, never SURVIVED. Two phases lost time to that.
+- For a task file whose client logic has a deployed tier, run the deployed scenario at the end of the phase that lands the client, not only at the last phase.
 
 ## Notes kept out of the proposal
 
