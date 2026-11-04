@@ -136,13 +136,16 @@ if (deploying) {
     config = join(scratch, 'wrangler.jsonc');
     const variant = configText
       .replace('"main": "src/index.ts"', `"main": ${JSON.stringify(resolve('src/index.ts'))}`)
+      .replace('"directory": "./dist/demo"', `"directory": ${JSON.stringify(resolve('dist/demo'))}`)
       .replace('"$schema": "./node_modules/wrangler/config-schema.json",', '')
       .replace('"compatibility_flags": ["global_fetch_strictly_public"]', '"compatibility_flags": []');
     if (variant.includes('global_fetch_strictly_public"]')) fail('The variant config still sets the flag');
     writeFileSync(config, variant);
   }
   try {
-    // The deployed Worker's bundle, never the conformance build's.
+    // The demo page, which the Worker serves as its assets, then the deployed Worker's bundle,
+    // never the conformance build's.
+    run('npm', ['run', '--silent', 'build:demo']);
     run('node', ['scripts/check-deploy-bundle.mjs', '--config', config]);
     const deployed = captured('node_modules/.bin/wrangler', ['deploy', '-c', config, '--name', name, '--var', `ORIGIN:${origin}`, '--var', `RETRY_SCHEDULE_MS:${RETRY_SCHEDULE_MS}`, '--secrets-file', SECRETS]);
     version = /Current Version ID: ([0-9a-f-]+)/.exec(deployed)?.[1];

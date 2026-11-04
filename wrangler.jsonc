@@ -58,6 +58,9 @@
     // change-set entries out.
     "EVENT_BODY_LIMIT": "262144"
   },
+  // The demo page, which `npm run build:demo` builds from demo/. A path no asset matches reaches
+  // the Worker, so the edge still answers every route it lists.
+  "assets": { "directory": "./dist/demo" },
   // The version each object runs, which it tells the page, since a deploy reaches each object late.
   "version_metadata": { "binding": "VERSION" },
   "observability": { "enabled": true }

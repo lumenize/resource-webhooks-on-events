@@ -1,0 +1,472 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue';
+import PartyBox from './components/PartyBox.vue';
+import TicketTable from './components/TicketTable.vue';
+import WireLabel from './components/WireLabel.vue';
+import { prepare, saveToken, short, state, step, STEPS, type PartyName, type WireName } from './demo.ts';
+
+// The stage is a 3 × 3 grid: the boxes take the corners, and the wires cross the middle column
+// and row. Every position below is a percentage of the stage, so the wires meet the boxes'
+// edges at any size: columns are 41% · 18% · 41% and rows 40% · 20% · 40%.
+interface Wire {
+  from: PartyName;
+  to: PartyName;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  color: string;
+  label: string;
+  kind: string;
+  lx: number;
+  ly: number;
+  align?: 'left' | 'right' | 'center';
+}
+
+const WIRES: Record<WireName, Wire> = {
+  'A-B': { from: 'A', to: 'B', x0: 41, y0: 20, x1: 59, y1: 20, color: 'A', label: 'A → B', kind: 'webhook', lx: 50, ly: 20 },
+  'X-A': { from: 'X', to: 'A', x0: 14, y0: 60, x1: 14, y1: 40, color: 'X', label: 'X ⇄ A', kind: 'MCP', lx: 14, ly: 50, align: 'left' },
+  'Y-A': { from: 'Y', to: 'A', x0: 66, y0: 60, x1: 34, y1: 40, color: 'Y', label: 'Y ⇄ A', kind: 'MCP', lx: 58, ly: 55 },
+  'B-X': { from: 'B', to: 'X', x0: 66, y0: 40, x1: 34, y1: 60, color: 'B', label: 'B → X', kind: 'socket', lx: 42, ly: 55 },
+  'B-Y': { from: 'B', to: 'Y', x0: 86, y0: 40, x1: 86, y1: 60, color: 'B', label: 'B → Y', kind: 'socket', lx: 86, ly: 50, align: 'right' },
+};
+
+const CLIENTS = ['X', 'Y'] as const;
+const token = ref(state.operatorToken);
+function onToken(): void {
+  saveToken(token.value);
+}
+
+const current = computed(() => Object.fromEntries(state.A.tickets.map(({ uri, revision }) => [uri, revision])));
+const lit = computed(() => new Set(state.pulses.map(({ wire }) => wire)));
+const caption = computed(() => {
+  if (state.done < 1) return state.done === 0 ? 'Prepared: tickets 3, 7 and 9 are on A' : 'The simple happy path';
+  const done = STEPS[state.done - 1];
+  return `Step ${done.n} · ${done.title}`;
+});
+const line = computed(() => {
+  if (state.done < 1) return state.done === 0 ? 'X and Y hold nothing yet, and each has a socket to B.' : '';
+  return STEPS[state.done - 1].line;
+});
+
+function dot(wire: WireName, from: PartyName) {
+  const w = WIRES[wire];
+  const forward = from === w.from;
+  return {
+    '--x0': `${forward ? w.x0 : w.x1}%`,
+    '--y0': `${forward ? w.y0 : w.y1}%`,
+    '--x1': `${forward ? w.x1 : w.x0}%`,
+    '--y1': `${forward ? w.y1 : w.y0}%`,
+    '--c': `var(--${from})`,
+  };
+}
+</script>
+
+<template>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <h1>Resource Events</h1>
+        <p>The proposal's simple happy path, live on Cloudflare Workers</p>
+      </div>
+      <div class="caption">
+        <div class="now">{{ caption }}</div>
+        <div v-if="line" class="line">{{ line }}</div>
+        <div class="status" :class="{ error: state.error }">{{ state.error || state.status }}</div>
+      </div>
+      <div class="controls">
+        <input v-model="token" type="password" placeholder="Operator token" autocomplete="off" spellcheck="false" @change="onToken" />
+        <button class="prepare" :disabled="state.busy" @click="onToken(), prepare()">{{ state.done < 0 ? 'Prepare' : 'Prepare again' }}</button>
+      </div>
+    </header>
+
+    <main class="stage">
+      <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        <line
+          v-for="(w, name) in WIRES"
+          :key="name"
+          :x1="w.x0"
+          :y1="w.y0"
+          :x2="w.x1"
+          :y2="w.y1"
+          :style="{ stroke: `var(--${w.color})`, color: `var(--${w.color})` }"
+          :class="{ lit: lit.has(name) }"
+          vector-effect="non-scaling-stroke"
+        />
+      </svg>
+      <div v-for="p in state.pulses" :key="p.id" class="dot" :style="dot(p.wire, p.from)"></div>
+
+      <PartyBox name="A" role="the server" color="A" area="1 / 1" :online="state.A.connected">
+        <div class="kpi">
+          <span class="label">latest moment</span>
+          <span class="value mono">{{ short(state.A.latest) }}</span>
+        </div>
+        <h3><code>tickets/{id}</code></h3>
+        <TicketTable :tickets="state.A.tickets" />
+        <h3>subscriptions</h3>
+        <ul class="plain">
+          <li v-for="(s, i) in state.A.subscriptions" :key="i">
+            <span class="who" :style="{ color: `var(--${s.client})` }">{{ s.client }}</span>
+            <span class="mono">{{ s.template }}</span>
+          </li>
+          <li v-if="!state.A.subscriptions.length" class="none">none</li>
+        </ul>
+      </PartyBox>
+
+      <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected">
+        <p class="note">Takes each client's webhooks, checks each signature, and passes the event down that client's socket.</p>
+        <h3>sockets</h3>
+        <ul class="plain">
+          <li v-for="client in ['X', 'Y']" :key="client">
+            <span class="who" :style="{ color: `var(--${client})` }">{{ client }}</span>
+            <span :class="state.B.sockets.includes(client) ? 'ok' : 'none'">{{ state.B.sockets.includes(client) ? 'connected' : 'not connected' }}</span>
+          </li>
+        </ul>
+        <h3>last delivery</h3>
+        <ul class="plain">
+          <li v-for="client in ['X', 'Y']" :key="client">
+            <span class="who" :style="{ color: `var(--${client})` }">{{ client }}</span>
+            <span class="mono">{{ state.B.lastStatus[client] ?? '—' }}</span>
+          </li>
+        </ul>
+      </PartyBox>
+
+      <PartyBox v-for="client in CLIENTS" :key="client" :name="client" :role="client === 'Y' ? 'a client, and the writer' : 'a client'" :color="client" :area="client === 'X' ? '3 / 1' : '3 / 3'" :online="state[client].ready">
+        <div class="kpi">
+          <span class="label">caught up to</span>
+          <span class="value mono">{{ short(state[client].caughtUpTo) }}</span>
+          <span v-if="state[client].waiting" class="waiting">{{ state[client].waiting }} event waiting</span>
+        </div>
+        <h3>copies of <code>tickets/{id}</code></h3>
+        <TicketTable :tickets="state[client].copies" :current="current" />
+        <h3 v-if="state[client].log.length">events</h3>
+        <ul class="plain log">
+          <li v-for="(entry, i) in state[client].log" :key="i" :class="entry.tone">{{ entry.text }}</li>
+        </ul>
+      </PartyBox>
+
+      <WireLabel
+        v-for="(w, name) in WIRES"
+        :key="`label-${name}`"
+        :label="w.label"
+        :kind="w.kind"
+        :color="w.color"
+        :x="w.lx"
+        :y="w.ly"
+        :align="w.align"
+        :above="w.ly >= 50"
+        :view="state.wires[name]"
+      />
+    </main>
+
+    <footer class="steps">
+      <button
+        v-for="s in STEPS"
+        :key="s.n"
+        class="step"
+        :class="{ done: state.done >= s.n, next: state.done + 1 === s.n }"
+        :disabled="state.busy || state.done + 1 !== s.n"
+        @click="step(s.n)"
+      >
+        <span class="n">{{ state.done >= s.n ? '✓' : s.n }}</span>
+        <span class="t">{{ s.title }}</span>
+      </button>
+    </footer>
+  </div>
+</template>
+
+<style scoped>
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  padding: 18px 26px 18px;
+  gap: 16px;
+}
+
+.top {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 28px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.brand p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.caption {
+  text-align: center;
+}
+
+.now {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.line {
+  margin-top: 4px;
+  font-size: 16.5px;
+  color: #c4ccda;
+}
+
+.status {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.status.error {
+  color: var(--bad);
+}
+
+.controls {
+  display: flex;
+  gap: 10px;
+}
+
+.controls input {
+  width: 190px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.prepare {
+  padding: 9px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-weight: 600;
+}
+
+.prepare:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+.stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: 41% 18% 41%;
+  grid-template-rows: 40% 20% 40%;
+  min-height: 0;
+}
+
+.wires {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  overflow: visible;
+}
+
+.wires line {
+  stroke-width: 2.5;
+  opacity: 0.35;
+  stroke-dasharray: 6 6;
+  transition: opacity 200ms;
+}
+
+.wires line.lit {
+  opacity: 0.95;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.dot {
+  position: absolute;
+  z-index: 4;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 30%, transparent), 0 0 22px var(--c);
+  animation: travel 900ms cubic-bezier(0.45, 0, 0.25, 1) forwards;
+}
+
+@keyframes travel {
+  from {
+    left: var(--x0);
+    top: var(--y0);
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  to {
+    left: var(--x1);
+    top: var(--y1);
+    opacity: 0;
+  }
+}
+
+.kpi {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.kpi .label {
+  color: var(--muted);
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.kpi .value {
+  font-size: 30px;
+  font-weight: 500;
+}
+
+.waiting {
+  margin-left: auto;
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--stale) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--stale) 55%, transparent);
+  color: var(--stale);
+  font-size: 13px;
+  font-weight: 600;
+  animation: breathe 1.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+h3 {
+  margin: 12px 0 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+h3 code {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+
+.note {
+  margin: 0 0 4px;
+  color: var(--muted);
+  font-size: 14.5px;
+  line-height: 1.45;
+}
+
+.plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plain li {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.who {
+  font-weight: 700;
+  min-width: 1.2em;
+}
+
+.ok {
+  color: var(--ok);
+}
+
+.none {
+  color: var(--faint);
+}
+
+.log li {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.log li.skip {
+  color: var(--muted);
+}
+
+.log li.catch {
+  color: var(--ok);
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 12px;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  text-align: left;
+  color: var(--faint);
+  transition: border-color 160ms, background 160ms;
+}
+
+.step .n {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.step .t {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.step.done {
+  color: var(--muted);
+}
+
+.step.done .n {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #0a0e16;
+}
+
+.step.next {
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--panel-2);
+  box-shadow: 0 0 0 3px #e6eaf21a;
+}
+
+.step.next:hover:not(:disabled) {
+  background: #1d2536;
+}
+</style>

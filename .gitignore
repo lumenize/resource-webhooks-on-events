@@ -4,6 +4,9 @@ coverage
 .wrangler
 .dev.vars
 .deployed.vars
+# The demo's secrets: the local dev server's, and the deployed demo Worker's.
+.demo-dev.vars
+.demo.vars
 *.log
 *.tsbuildinfo
 .DS_Store

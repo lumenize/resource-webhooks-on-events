@@ -125,6 +125,16 @@ const TEMPLATE_INFO: Readonly<Record<string, { name: string; description: string
 export const MAX_URI_BYTES = 2 * 1024;
 /** The largest contents a create or an update takes, in UTF-8 bytes. */
 export const MAX_CONTENTS_BYTES = 16 * 1024;
+/** How many resources of each timeline A's holdings name for the page, past which they name none more. */
+export const HELD_RESOURCES = 25;
+
+/** One resource as A's holdings name it: its revision, and its contents unless it is deleted. */
+export interface HeldResource {
+  uri: string;
+  revision: string;
+  deleted?: true;
+  contents?: string;
+}
 
 // The strawman's methods, whose refusals carry its reasons.
 const STRAWMAN_METHODS = new Set(['resources/stat', 'resources/create', 'resources/update', 'resources/delete']);
@@ -218,9 +228,21 @@ export class ServerRole {
     return { ...result, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO, ...result._meta } };
   }
 
-  /** What A holds, for the page: each subscription, without its secret. */
-  holdings(): { subscriptions: Omit<Subscription, 'secret'>[] } {
-    return { subscriptions: this.#subscriptions.held() };
+  /**
+   * What A holds, for the page: each timeline's latest and oldest moment, each resource's newest
+   * row on it, a tombstone included, up to HELD_RESOURCES a timeline, and each subscription,
+   * without its secret.
+   */
+  holdings(): { timelines: { name: string; latest: string; oldest: string }[]; resources: HeldResource[]; subscriptions: Omit<Subscription, 'secret'>[] } {
+    const timelines = this.store.timelines();
+    const resources = timelines.flatMap(({ name }) =>
+      this.store.newestInPathOrder(name, '', '', HELD_RESOURCES).map((row) => ({
+        uri: this.#uri(row.path),
+        revision: row.moment,
+        ...(row.deleted ? { deleted: true as const } : { contents: row.contents! }),
+      })),
+    );
+    return { timelines, resources, subscriptions: this.#subscriptions.held() };
   }
 
   /**

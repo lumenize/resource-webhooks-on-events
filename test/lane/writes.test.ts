@@ -2,7 +2,7 @@
 // R7, R17, D10), on both layouts. Each timeline's latest and oldest moments are read from A's
 // storage, below the public API, since a write's result shows only the moments it minted.
 import { abortAllDurableObjects, runInDurableObject } from 'cloudflare:test';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChangeSetEntry } from '../../src/extension-types';
 import type { Ticket } from '../../src/resource-types';
 import { LAYOUTS as MAPS, MAX_CONTENTS_BYTES, MAX_URI_BYTES } from '../../src/server-role/server-role';
@@ -183,6 +183,24 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     }
     expect((await refusal(stat(lane, 'tickets/ticket-3'))).data).toMatchObject({ reason: 'notFound' });
   });
+  it("reports to the page each timeline's latest moment and each resource as it stands, a deleted one as a tombstone", async () => {
+    const lane = newLane(layout);
+    const page = await watch(lane, 'A');
+    const three = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
+    const nine = await create(lane, 'tickets/ticket-9', { title: 'Paper out', status: 'open' });
+    const gone = await remove(lane, 'tickets/ticket-9', nine.revision);
+    const latest = (report: Record<string, unknown>) => report.kind === 'holdings' && (report.resources as { revision: string }[]).some(({ revision }) => revision === gone.changes[0].revision);
+    await vi.waitFor(() => expect(page.reports().some(latest)).toBe(true));
+    const holdings = page.reports().filter(latest).at(-1)!;
+    expect(holdings.resources).toEqual([
+      { uri: `${lane.root}/tickets/ticket-3`, revision: three.revision, contents: JSON.stringify({ title: 'Printer jams', status: 'open' }) },
+      { uri: `${lane.root}/tickets/ticket-9`, revision: gone.changes[0].revision, deleted: true },
+    ]);
+    const tickets = (holdings.timelines as { name: string; latest: string }[]).find(({ latest }) => latest === gone.changes[0].revision);
+    expect(tickets).toBeDefined();
+    page.close();
+  });
+
   it('refuses a ticket that duplicates itself, and adds a duplicate once', async () => {
     const lane = newLane(layout);
     const opened = await create(lane, 'tickets/ticket-9', { title: 'Printer jams', status: 'open' });
