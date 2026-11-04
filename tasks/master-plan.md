@@ -679,12 +679,11 @@ Every phase conformed once its verifier's findings were fixed, and no phase fail
 3. **A treats every client as public**, whatever `token_endpoint_auth_method` its document declares, and ignores a `client_secret` sent to the token endpoint (Phase 2).
 4. **A's open back channel reports each document fetch's status and error code**, so anyone can learn the status of a public https URL through A. The back channel is the demo's, and stays open for it (Phase 2's verifier).
 5. **The cascade forgets on a change and on a delete.** Changing a ticket's `duplicateOf` leaves the earlier ticket's `duplicatedBy` naming it. A delete runs no cascade, so a deleted ticket's note stays, as does a mention of it in another ticket's `duplicatedBy` (Phase 3).
-6. **A uri the request schema refuses as malformed gets `-32602` with the schema's errors as `data`**, where the strawman's refusal carries `invalidUri` (Phase 3's verifier).
-7. **A lapsed subscription's row stays until A next starts**, and gets no event meanwhile, as in the first flavor (Phase 6).
-8. **A read whose timeline is wiped between its pages runs on**, and the catch-up after it gets `momentExpired`, which R21 answers by starting over (Phase 4).
-9. **R19's test asserts that the client stays at `from` after a patch it can't apply**, and no mutation turns that assertion red alone (Phase 7's verifier).
-10. **`npm test -- <filter>` hands the filter to the coverage check**, not to vitest, so the whole suite runs and the filter is ignored. Run one file with `npx vitest run --project <project> <file>` (Phase 8's verifier).
-11. **`conformance-baseline.yml` still lists `tools-call-with-progress`**, carried from the first flavor in Phase 1 with its reason (Phase 8's verifier).
+6. **A lapsed subscription's row stays until A next starts**, and gets no event meanwhile, as in the first flavor (Phase 6).
+7. **A read whose timeline is wiped between its pages runs on**, and the catch-up after it gets `momentExpired`, which R21 answers by starting over (Phase 4).
+8. **`conformance-baseline.yml` still lists `tools-call-with-progress`**, carried from the first flavor in Phase 1 with its reason (Phase 8's verifier).
+
+The close-out fixed three more: a malformed uri now gets the strawman's `invalidUri` on its four methods, `npm test -- <file>` runs that file alone and skips the rule check, and a mutation that moves the client past a patch it couldn't apply turns R19's test red. After them, the suite is 456 tests in 34 files, all passing, both conformance suites pass, and the deployed tier passes its four tests with `ACCOUNT_CAP` in place of `REGISTRATION_CAP`.
 
 ### Phase 1
 
@@ -825,7 +824,7 @@ Residuals to know of:
 
 Residuals the verifier named:
 
-- A uri the request schema refuses as malformed gets `-32602` with the schema's errors as `data`, not the strawman's `invalidUri`.
+- A uri the request schema refuses as malformed gets `-32602` with the schema's errors as `data`, not the strawman's `invalidUri`. The close-out maps it to `invalidUri`.
 - The prunes read every row on each write. Until a tombstone is dropped, the oldest moment stays at zero, so no row goes, and the read grows with every change.
 
 **For Larry, from the verifier.** R4 and the split layout's write across two timelines, now the first decision in § *Open after the build*.
@@ -1014,7 +1013,7 @@ Choices the phase made where the task file left one open:
 - The lane-body-limit R11 test never showed that the event left `changes` out. It now does, and holds the event's catch-up at its reply to show nothing is logged until the catch-up ends.
 - Nits: a patched copy kept the read's `_meta` revision, and now takes the patch's. A read item with no `_meta` revision got the string `"undefined"`, which sorts after every moment, and now gets the empty string. Five comments in `copies.ts` and four in its tests said more than the code does.
 - Mutation checks, each turning only its test red: catching up from the shared moment after a read, keeping a failed watch, ending the poll at a failure, taking a `nextPollMs` that is no number as the wait, logging the event before its catch-up ends, overlapping runs in lane-paged, and, in the poll test of its own, waiting after an abort during a run and keeping each abort listener.
-- Residual: R19's test asserts that the client stays at `from` after a patch it can't apply, and no mutation turns that assertion red alone.
+- R19's test asserts that the client stays at `from` after a patch it can't apply, and no mutation here turned that assertion red alone. At the close-out, moving the client on after the failed apply turned it red on both layouts.
 
 **Close-out.** The suite is 443 tests in 34 files, all passing, three of them Phase 8's rule-coverage tests, which the closing run included. Both conformance suites pass. `build-checks.test.ts` lists `src/client/copies.ts` among the modules Node loads with types stripped, as Phase 1 left for this phase.
 
@@ -1049,7 +1048,7 @@ Choices the phase made where the task file left one open:
 - The left-behind scan matched references only, so an unreferenced `targets.ts` or `notes-http.ts` would pass. A test now checks that the four replaced files are gone.
 - Nits: the coverage check's default file is now `results/test-results.json`, the coverage test leaves no scratch directory behind, and five comments in the deployed tests said more than the code does, two of them citing `sep-notes.md`, which this repo doesn't have.
 - Mutation checks, each turning only its test red: the scenario with the writer catching up on its own event, and with the client offering no patch format. The left-behind file test fails naming all four files when `SCAN_ROOT` points at the first flavor's tree.
-- Residuals: `npm test -- <filter>` hands the filter to the coverage check, not to vitest, so the whole suite runs and the filter is ignored. Run one file with `npx vitest run --project <project> <file>`. `conformance-baseline.yml` still lists `tools-call-with-progress`, carried from the first flavor in Phase 1 with its reason. The criterion asks the proof to leave out a rule no comment mentions, and a comment in `writes.test.ts` mentions R17. The check reads titles only, so the proof stands, on a report written by hand, as the choices above say.
+- Residuals: `npm test -- <filter>` handed the filter to the coverage check, not to vitest, so the whole suite ran and the filter was ignored, until the close-out's `scripts/test.mjs`. `conformance-baseline.yml` still lists `tools-call-with-progress`, carried from the first flavor in Phase 1 with its reason. The criterion asks the proof to leave out a rule no comment mentions, and a comment in `writes.test.ts` mentions R17. The check reads titles only, so the proof stands, on a report written by hand, as the choices above say.
 - With these fixes and Phase 7's, the suite is 455 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test, and both conformance suites pass. The deployed tier passed its four tests with every change to code in, and only a comment and one harness test came after.
 
 **Close-out.** The suite is 443 tests in 34 files, all passing, with every rule from R1 to R24 but R6 named by a passing test. Both conformance suites pass, and the deployed tier passes its four tests on `test-resource-webhooks-on-events`. `src/` holds no `resources/webhooks/` method, no `'mcp.resource.updated'`, no `targets.ts` and no `notes-http.ts`.

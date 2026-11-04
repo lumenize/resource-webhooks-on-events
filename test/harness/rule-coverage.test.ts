@@ -1,4 +1,4 @@
-// The rule-coverage check `npm test` runs after the suite, given reports written by hand: it
+// The rule-coverage check `npm test` runs after the whole suite, given reports written by hand: it
 // passes only when every rule from R1 to R24 but R6 is named before the first colon of a passing
 // test's title.
 import { execFileSync } from 'node:child_process';

@@ -126,6 +126,9 @@ export const MAX_URI_BYTES = 2 * 1024;
 /** The largest contents a create or an update takes, in UTF-8 bytes. */
 export const MAX_CONTENTS_BYTES = 16 * 1024;
 
+// The strawman's methods, whose refusals carry its reasons.
+const STRAWMAN_METHODS = new Set(['resources/stat', 'resources/create', 'resources/update', 'resources/delete']);
+
 // A's two types, by the path's first segment, each one segment of id beneath it.
 const TYPES = { tickets: 'Ticket', notes: 'Note' } as const;
 type Type = keyof typeof TYPES;
@@ -203,7 +206,14 @@ export class ServerRole {
     const method = this.#methods.get(request.method);
     if (!method) throw new JsonRpcError(METHOD_NOT_FOUND, `Method not found: ${request.method}`);
     const errors = requestErrors(request) ?? [];
-    if (errors.length > 0) throw new JsonRpcError(INVALID_PARAMS, 'Invalid params', errors.slice(0, 10));
+    if (errors.length > 0) {
+      // The strawman's error table answers a malformed uri with a reason of its own.
+      const uri = (request.params as { uri?: unknown } | undefined)?.uri;
+      if (STRAWMAN_METHODS.has(request.method) && typeof uri === 'string' && errors.some(({ instanceLocation }) => instanceLocation === '#/params/uri')) {
+        throw new JsonRpcError(INVALID_PARAMS, 'Invalid uri', { reason: 'invalidUri', uri });
+      }
+      throw new JsonRpcError(INVALID_PARAMS, 'Invalid params', errors.slice(0, 10));
+    }
     const result = await method(request.params ?? {}, principal);
     return { ...result, _meta: { 'io.modelcontextprotocol/serverInfo': SERVER_INFO, ...result._meta } };
   }

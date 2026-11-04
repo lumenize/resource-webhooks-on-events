@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "wrangler dev",
-    "test": "npm run check:schema && vitest run --reporter=default --reporter=json --outputFile.json=results/test-results.json && node scripts/check-rule-coverage.mjs results/test-results.json",
+    "test": "node scripts/test.mjs",
     "type-check": "tsc --noEmit",
     "types": "wrangler types --env-file .dev.vars.example --strict-vars false",
     "generate:schema": "node scripts/generate-schemas.mjs",

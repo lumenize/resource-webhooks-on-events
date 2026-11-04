@@ -250,6 +250,23 @@ describe('what A writes, and where', () => {
     ]);
   });
 
+  it('answers a malformed uri with invalidUri on each of the strawman methods', async () => {
+    const lane = newLane();
+    const contents = contentsFor(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
+    for (const [method, params] of [
+      ['resources/stat', {}],
+      ['resources/create', { contents }],
+      ['resources/update', { contents, ifMatch: '000000000001' }],
+      ['resources/delete', {}],
+    ] as const) {
+      expect(await refusal(lane.client.request(method, { uri: 'ticket-3', ...params }))).toEqual({ code: -32602, data: { reason: 'invalidUri', uri: 'ticket-3' } });
+    }
+    // A refusal of another member keeps the schema's errors.
+    const missing = await refusal(lane.client.request('resources/create', { uri: contents.uri }));
+    expect(missing.code).toBe(-32602);
+    expect(Array.isArray(missing.data)).toBe(true);
+  });
+
   it('refuses contents that are not the type the path names, contents for another uri, and a uri A cannot write', async () => {
     const lane = newLane();
     const uri = `${lane.root}/tickets/ticket-3`;
