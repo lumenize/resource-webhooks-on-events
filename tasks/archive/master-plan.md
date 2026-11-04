@@ -2,6 +2,11 @@
 
 **Status:** Pass 1, design intent, rewritten on 2026-11-01 for Larry's read from scratch, after two Stage 1 panel passes, and revised on 2026-11-02 and 2026-11-03 with his decisions on paging, starting over, naming and the event (D13 to D19), and after a third Stage 1 pass on 2026-11-03, with his decisions on polling, restores, templates a server doesn't list, the event's id, a routing header, history and test layouts (D10, D12, D20 to D25). Pass 2's phases were written on 2026-11-03 and revised the same day for a Stage 2 panel's findings. Larry settled the names and the scope they raised that day. The first flavor of this work, `../resource-webhooks-standalone`, was paused on 2026-10-31 and is this repo's mining source.
 
+**Archived on 2026-11-04.** All eight phases are built, as § *Build notes* records. The proposal half, § *References* through § *uriGlob, later*, was split out the same day, and now lives and changes as `proposals/XXXX-resource-webhooks.md` on the `resource-webhooks-on-events` branch of `../experimental-ext-triggers-events`. There § *Decisions* is its § *Rationale*, less D8 and D10, which are about the prototype alone, and Q6 and Q7 are its § *Open Questions*. Two claims below were true when written and are false now:
+
+- § *Current state* opens "Nothing is built here yet."
+- § *Current state* leaves `scripts/check-proposal.mjs` behind "until the proposal is split out". It is carried, and checks the split-out proposal.
+
 ## References
 
 This proposal builds on two drafts, a working group's problem statements and one revision of MCP:
