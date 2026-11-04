@@ -18,7 +18,7 @@ export interface AuthorizationServerOptions {
   /** The client ID metadata document at `url`, parsed, or `undefined` if it could not be had. */
   clientDocument: (url: string) => Promise<unknown>;
   /** How many accounts may be created between Wipes. */
-  registrationCap: number;
+  accountCap: number;
 }
 
 export const TOKEN_LIFETIME_SECONDS = 3600;
@@ -47,8 +47,8 @@ export class AuthorizationServer {
 
   constructor(options: AuthorizationServerOptions) {
     // A cap that is not a positive integer would bound nothing, so A refuses to start without one.
-    if (!Number.isInteger(options.registrationCap) || options.registrationCap < 1) {
-      throw new RangeError(`The registration cap must be a positive integer, not ${options.registrationCap}`);
+    if (!Number.isInteger(options.accountCap) || options.accountCap < 1) {
+      throw new RangeError(`The account cap must be a positive integer, not ${options.accountCap}`);
     }
     this.#sql = options.sql;
     this.#options = options;
@@ -183,7 +183,7 @@ export class AuthorizationServer {
   // Counts one more account under this Wipe, unless the cap is reached.
   #createAccount(wipes: number): boolean {
     const count = this.#sql.exec<{ count: number }>('SELECT count FROM Accounts WHERE wipes = ?', wipes).toArray()[0]?.count ?? 0;
-    if (count >= this.#options.registrationCap) return false;
+    if (count >= this.#options.accountCap) return false;
     this.#sql.exec('INSERT INTO Accounts (wipes, count) VALUES (?, 1) ON CONFLICT (wipes) DO UPDATE SET count = count + 1', wipes);
     return true;
   }

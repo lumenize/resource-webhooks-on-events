@@ -434,7 +434,7 @@ describe('the authorization server', () => {
     const lane = newLane();
     const { challenge } = await pkce();
     const first = await signInAs(lane);
-    for (let i = 1; i < Number(env.REGISTRATION_CAP); i++) await signInAs(lane);
+    for (let i = 1; i < Number(env.ACCOUNT_CAP); i++) await signInAs(lane);
     const refused = await authorize(lane, grant(OWN, challenge, `${lane.root}/mcp`));
     expect(redirectedError(refused)).toBe('temporarily_unavailable');
     expect(refused.headers.get('Set-Cookie')).toBeNull();
@@ -443,7 +443,7 @@ describe('the authorization server', () => {
     // After a Wipe, a grant with a cookie from before it is a new account, which counts.
     const page = await watch(lane, 'A');
     await page.control('wipe');
-    for (let i = 0; i < Number(env.REGISTRATION_CAP); i++) expect((await signInAs(lane, cookieOf(first.setCookie))).setCookie).not.toBeNull();
+    for (let i = 0; i < Number(env.ACCOUNT_CAP); i++) expect((await signInAs(lane, cookieOf(first.setCookie))).setCookie).not.toBeNull();
     expect(redirectedError(await authorize(lane, grant(OWN, challenge, `${lane.root}/mcp`)))).toBe('temporarily_unavailable');
   });
 
@@ -461,12 +461,12 @@ describe('the authorization server', () => {
     expect(response.status).toBe(403);
   });
 
-  it('refuses to start with a registration cap that is not a positive integer', async () => {
+  it('refuses to start with an account cap that is not a positive integer', async () => {
     const lane = newLane();
     // Below the public API: the cap comes from a binding, so only a server built by hand can be
     // given a bad one.
     const names = await runInDurableObject(lane.stub, (_instance, state) =>
-      [NaN, 0, 1.5].map((registrationCap) => {
+      [NaN, 0, 1.5].map((accountCap) => {
         try {
           new AuthorizationServer({
             sql: state.storage.sql,
@@ -475,7 +475,7 @@ describe('the authorization server', () => {
             epoch: () => 0,
             resourceAllowed: () => false,
             clientDocument: async () => undefined,
-            registrationCap,
+            accountCap,
           });
           return 'started';
         } catch (error) {

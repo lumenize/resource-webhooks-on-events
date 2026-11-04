@@ -24,7 +24,7 @@
     "SERVER_INSTANCE": "A",
     "GATEWAY_INSTANCE": "B",
     // How many accounts A's authorization server may create between Wipes, one per new browser.
-    "REGISTRATION_CAP": "1000",
+    "ACCOUNT_CAP": "1000",
     // How long A keeps a superseded revision's contents, and a deletion, before a later write
     // prunes them (R21).
     "CUTOFF_WINDOW_MS": "86400000",

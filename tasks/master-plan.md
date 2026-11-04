@@ -481,7 +481,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 
 - **Code:** everything § *Current state* carries. Also `src/auth/` and `src/client/mcp-client.ts` as they stand, on DCR, for Phase 2 to adapt. `src/server-role/deliveries.ts` waits for Phase 6, since A sends nothing before then, so `src/server.ts` builds no `send` yet. `src/server-role/validation.ts` and `scripts/generate-schemas.mjs` come in cut down to the spec's schema and `events-types`.
 - **The server role:** `src/server-role/server-role.ts` comes in reduced to MCP's lifecycle, `resources/list` and `resources/templates/list` with no resources yet, `resources/read`, and `tools/list` and `tools/call`, each over `ServerExtras` alone, so the conformance build keeps its fixture resources, templates and tools. A declares `tools` only when extras supply some, so A's own tools are gone (D7). Phase 3 adds A's own resources.
-- **The Wipe** keeps a count of Wipes in A's storage, which `TokenClaims.epoch` and the registration cap read in place of `VersionStore.epoch()`.
+- **The Wipe** keeps a count of Wipes in A's storage, which `TokenClaims.epoch` and the account cap read in place of `VersionStore.epoch()`.
 - **Root files:** `package.json`, `package-lock.json`, `wrangler.jsonc`, `wrangler.conformance.jsonc`, `vitest.config.ts`, `tsconfig.json`, `worker-configuration.d.ts` (regenerated), `.nvmrc`, `.dev.vars.example` and `conformance-baseline.yml`, named for this repo. The page's build stays behind with the demo page: `tsconfig.page.json`, `public/`, the `assets` and `build` entries, `build:page`, the `browser` project, and `deployed.mjs`'s rewrite of `./public`. `deployed.mjs` and `build-checks.test.ts` call the bundle check by its new name, `scripts/check-deploy-bundle.mjs`. Each copied file's entry comes into `ATTRIBUTIONS.md` with it.
 - **The lane's infrastructure:** `test/lane/lane.ts`, `setup.ts` and `receiver.ts`, `test/harness/sign-in.ts`, `test/deployed/tier.ts`, and `test/client/parties.ts` without `versioned`, `write`, `subscribe`, `subscribeResource` and `subscribeTarget`, and the imports they need.
 - **Tests:** `test/lane/standard-webhooks.test.ts`, `fetch-spy.test.ts`, `spec-examples.test.ts`, `edge.test.ts` with its probes moved from `/notes/` to `/mcp` and the metadata routes, `mcp-core.test.ts`'s transport and JSON-RPC cases, `authorization.test.ts`, `oauth-client.test.ts`, `lane-closed/controls.test.ts`, B's tests from `level1.test.ts` that need no event from A (signed POSTs, the secret, the upgrade refusals), and `test/harness/`'s `conformance-build`, `merge-patch`, `raw-http`, `schema-check` and `build-checks`. `build-checks.test.ts` leaves `src/client/copies.ts` out of its list until Phase 7 and drops the two left-behind type files from `ROLE_IMPORTS`, and `schema-check.test.ts` edits a type that comes in here in place of `Note`, until Phase 3 brings `Note`.
@@ -507,7 +507,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - **The account cookie is `HttpOnly; Secure; SameSite=Strict`, with its `Path` set to the authorize endpoint's,** and carries the Wipe count, so a cookie from before a Wipe counts as no cookie. Each code carries the Wipe count too, and the token endpoint refuses a code from before the last Wipe with `invalid_grant`.
 - **A fetches a client ID metadata document as it sends a delivery,** with `redirect: 'manual'` and `ATTEMPT_TIMEOUT_MS`, and takes any `3xx` as an invalid document. The Worker's own clients' document it reads from the code that serves it, since under wrangler's harness its origin is the production host. It reports each fetch's outcome on its back channel, with Cloudflare's error code as `send` parses it.
 - **A refuses a document whose `redirect_uris` aren't all on the Worker's origin or loopback,** as the first flavor's `register` refused such a redirect URI, so a code never goes to another site.
-- **The registration cap is one mechanism,** a count of accounts keyed by the Wipe count, and the Wipe no longer clears it.
+- **The account cap is one mechanism,** a count of accounts keyed by the Wipe count, and the Wipe no longer clears it.
 
 **Success criteria (capable of failing).**
 
@@ -515,7 +515,7 @@ Each phase is a goal with criteria that can fail, built in the order shown. A ph
 - A refuses an authorization request whose document's `client_id` differs from the document's URL, one whose `redirect_uri` the document doesn't list, one whose document answers `302`, and one whose document lists a redirect URI off the Worker's origin and loopback, each in a test of its own, and accepts a request that matches. The token endpoint takes a public client, with PKCE and no secret.
 - Two grants from one browser, the test client keeping A's cookie between them, bring back the same `sub`. A grant without the cookie, or with one from before a Wipe, brings a new one, which counts toward the cap. The first grant's `Set-Cookie` has `SameSite=Strict`, `HttpOnly`, `Secure` and the authorize path.
 - A code issued before a Wipe gets `invalid_grant` after it.
-- After `REGISTRATION_CAP` new accounts since a Wipe, the next is refused, and after a Wipe one more is accepted.
+- After `ACCOUNT_CAP` new accounts since a Wipe, the next is refused, and after a Wipe one more is accepted.
 - A second principal's token opening `/gateway/B/ws/<the first's instance>` leaves the first principal's socket open, and a delivery to `/gateway/B/hooks/<first sub>/<instance>` still reaches only the first socket. A client's reconnect keeps its hook URL.
 - The client falls back to DCR against metadata that advertises no document support.
 - The client suite's `auth/basic-cimd:cimd-client-id-used` passes and leaves `conformance-baseline.yml`.
@@ -670,7 +670,7 @@ Every phase conformed once its verifier's findings were fixed, and no phase fail
 **Decisions for Larry:**
 
 1. **R4 and a write that spans timelines,** decided. On the split layout, closing a ticket closes its note in one transaction at two moments, one on each timeline (Phase 3's verifier). R4 stays as written, and D10 records that the split map breaks its "so" clause on purpose, to test the commit per timeline (Larry, 2026-11-03).
-2. **The new names.** Each phase's *For Larry* lists the names it brought. A reader outside this repo meets B's hook message, `{"type": "hook", "hookUrl"}`, the account cookie `rw_account`, the `u_` and `i_` prefixes, A's back-channel `document` report, and the types in `src/extension-types.ts`. The rest are constants and code names, among them `REGISTRATION_CAP`, which now caps accounts, and `SOCKETS_PER_SUBJECT`.
+2. **The new names,** decided. Each phase's *For Larry* lists the names it brought, and every one stays but `REGISTRATION_CAP`, which caps accounts now that registration is by document alone, and is renamed `ACCOUNT_CAP` (Larry, 2026-11-03).
 
 **Residuals:**
 
@@ -727,7 +727,7 @@ A residual to know of: a socket token from before a Wipe of A still opens a sock
 - The account cookie, `rw_account`, and its value, `<Wipe count>.<sub>.<signature>`.
 - A's back-channel report of each document fetch, `{"kind": "document", "url", "status"?, "errorCode"?, "failure"?}`, whose `failure` is one of `timeout`, `connection_refused`, `too_large` or `not_json`.
 - The `u_` and `i_` prefixes, from the first flavor's design table, now in code.
-- `REGISTRATION_CAP` keeps its name, though it now caps accounts.
+- `REGISTRATION_CAP` kept its name, though it now caps accounts, until the close-out renamed it `ACCOUNT_CAP`.
 
 Three things differ from the phase as written, none a design change, and the phase text now says so where it named them:
 

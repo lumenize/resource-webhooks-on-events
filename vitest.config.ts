@@ -9,7 +9,7 @@ const BINDINGS = {
   // meets a moment too old.
   SUBSCRIPTION_TTL_MS: '30000',
   // Small, so a test reaches the cap.
-  REGISTRATION_CAP: '5',
+  ACCOUNT_CAP: '5',
   TOKEN_SIGNING_KEY: 'test-signing-key-for-the-vitest-plugin-lane-only',
   SUBSCRIPTION_ID_KEY: 'test-subscription-id-key-for-the-lane-only',
   // Milliseconds, so a test watches every retry with real timers.

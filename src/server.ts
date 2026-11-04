@@ -93,7 +93,7 @@ export class Server extends DurableObject<Env> {
       resourceAllowed: (resource) =>
         resource === mcpEndpoint(env.ORIGIN, name) || (resource.startsWith(sockets) && INSTANCE.test(resource.slice(sockets.length))),
       clientDocument: (url) => this.#clientDocument(url),
-      registrationCap: Number(env.REGISTRATION_CAP),
+      accountCap: Number(env.ACCOUNT_CAP),
     });
   }
 
