@@ -92,13 +92,13 @@ tr.stale .rev {
   font-weight: 600;
 }
 
+/* The page's note, from comparing the copy with A's: the client itself can't know. */
 tr.stale .rev::after {
-  content: ' behind';
+  content: ' (behind A)';
   font-family: var(--sans);
   font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .none {

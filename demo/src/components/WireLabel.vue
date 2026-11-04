@@ -129,7 +129,7 @@ const html = computed(() => {
 .pop {
   position: absolute;
   top: calc(100% + 10px);
-  width: 840px;
+  width: min(1080px, 96vw);
   max-height: 46vh;
   display: flex;
   flex-direction: column;

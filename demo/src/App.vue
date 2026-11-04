@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import PartyBox from './components/PartyBox.vue';
 import TicketTable from './components/TicketTable.vue';
 import WireLabel from './components/WireLabel.vue';
-import { prepare, saveToken, short, state, step, STEPS, type PartyName, type WireName } from './demo.ts';
+import { chooseScene, currentScene, prepare, saveToken, SCENE_MENU, short, state, step, type PartyName, type WireName } from './demo.ts';
 
 // The stage is a 3 × 3 grid: the boxes take the corners, and the wires cross the middle column
 // and row. Every position below is a percentage of the stage, so the wires meet the boxes'
@@ -66,15 +66,20 @@ function onToken(): void {
 
 const current = computed(() => Object.fromEntries(state.A.tickets.map(({ uri, revision }) => [uri, revision])));
 const lit = computed(() => new Set(state.pulses.map(({ wire }) => wire)));
+const scene = computed(() => currentScene());
+const steps = computed(() => scene.value.steps.map((each, i) => ({ ...each, n: i + 1 })));
 const caption = computed(() => {
-  if (state.done < 1) return state.done === 0 ? 'Prepared: tickets 3, 7 and 9 are on A' : 'The simple happy path';
-  const done = STEPS[state.done - 1];
+  if (state.done < 1) return state.done === 0 ? 'Prepared: tickets 3, 7 and 9 are on A' : scene.value.title;
+  const done = steps.value[state.done - 1];
   return `Step ${done.n} · ${done.title}`;
 });
 const line = computed(() => {
-  if (state.done < 1) return state.done === 0 ? 'X and Y hold nothing yet, and each has a socket to B.' : '';
-  return STEPS[state.done - 1].line;
+  if (state.done < 1) return state.done === 0 ? scene.value.ready : '';
+  return steps.value[state.done - 1].line;
 });
+function onScene(event: Event): void {
+  chooseScene((event.target as HTMLSelectElement).value);
+}
 
 function dot(wire: WireName, from: PartyName) {
   const w = WIRES[wire];
@@ -94,8 +99,9 @@ function dot(wire: WireName, from: PartyName) {
     <header class="top">
       <div class="brand">
         <h1>Resource Events</h1>
-        <p>The proposal's simple happy path, live on Cloudflare Workers</p>
-        <a class="pr" href="https://github.com/modelcontextprotocol/experimental-ext-triggers-events/pull/19" target="_blank" rel="noopener">experimental-ext-triggers-events #19</a>
+        <select class="scene" :value="state.scene" :disabled="state.busy" aria-label="Scene" @change="onScene">
+          <option v-for="item in SCENE_MENU" :key="item.title" :value="item.id ?? item.title" :disabled="!item.id">{{ item.id ? item.title : `${item.title} (${item.why})` }}</option>
+        </select>
       </div>
       <div class="caption">
         <div class="now">{{ caption }}</div>
@@ -103,8 +109,11 @@ function dot(wire: WireName, from: PartyName) {
         <div class="status" :class="{ error: state.error }">{{ state.error || state.status }}</div>
       </div>
       <div class="controls">
-        <input v-model="token" type="password" placeholder="Operator token" autocomplete="off" spellcheck="false" @change="onToken" />
-        <button class="prepare" :disabled="state.busy" @click="onToken(), prepare()">{{ state.done < 0 ? 'Prepare' : 'Prepare again' }}</button>
+        <div class="row">
+          <input v-model="token" type="password" placeholder="Operator token" autocomplete="off" spellcheck="false" @change="onToken" />
+          <button class="prepare" :disabled="state.busy" @click="onToken(), prepare()">Auth/Reset</button>
+        </div>
+        <a class="pr" href="https://github.com/modelcontextprotocol/experimental-ext-triggers-events/pull/19" target="_blank" rel="noopener">experimental-ext-triggers-events #19</a>
       </div>
     </header>
 
@@ -157,7 +166,7 @@ function dot(wire: WireName, from: PartyName) {
         </div>
       </PartyBox>
 
-      <PartyBox v-for="client in CLIENTS" :key="client" :name="client" :role="client === 'Y' ? 'a client, and the writer' : 'a client'" :color="client" :area="client === 'X' ? '3 / 1' : '3 / 3'" :online="state[client].ready">
+      <PartyBox v-for="client in CLIENTS" :key="client" :name="client" :role="scene.roles[client]" :color="client" :area="client === 'X' ? '3 / 1' : '3 / 3'" :online="state[client].ready">
         <div class="kpi">
           <span class="label">caught up to</span>
           <span class="value mono">{{ short(state[client].caughtUpTo) }}</span>
@@ -187,9 +196,9 @@ function dot(wire: WireName, from: PartyName) {
       />
     </main>
 
-    <footer class="steps">
+    <footer class="steps" :style="{ gridTemplateColumns: `repeat(${steps.length}, 1fr)` }">
       <button
-        v-for="s in STEPS"
+        v-for="s in steps"
         :key="s.n"
         class="step"
         :class="{ done: state.done >= s.n, next: state.done + 1 === s.n, auto: 'auto' in s }"
@@ -271,7 +280,37 @@ function dot(wire: WireName, from: PartyName) {
 
 .controls {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.controls .row {
+  display: flex;
   gap: 10px;
+}
+
+.scene {
+  margin-top: 4px;
+  max-width: 460px;
+  padding: 4px 30px 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238b95a8'/%3E%3C/svg%3E") no-repeat right 10px center;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.scene:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.scene option:disabled {
+  color: var(--faint);
 }
 
 .controls input {
@@ -454,7 +493,6 @@ h3 code {
 
 .steps {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
   gap: 12px;
 }
 

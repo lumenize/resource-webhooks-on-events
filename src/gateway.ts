@@ -99,7 +99,8 @@ export class Gateway extends DurableObject<Env> {
     if (this.ctx.getTags(socket).includes(PAGE_TAG)) return;
     const { client } = socket.deserializeAttachment() as Attachment;
     report(this.ctx, 'B', { kind: 'closed', client, code, reason });
-    this.#reportHoldings();
+    // The runtime still lists a socket while its close is handled, so the report leaves it out.
+    this.#reportHoldings(socket);
   }
 
   async alarm(): Promise<void> {
@@ -142,13 +143,13 @@ export class Gateway extends DurableObject<Env> {
     return Date.now() - lastSeen > 2 * this.#heartbeatMs ? undefined : { socket, attachment };
   }
 
-  // Each client's socket and its secret, to every page listening, and nothing when none is. The
-  // report redacts each secret.
-  #reportHoldings(): void {
+  // Each client's socket and its secret, to every page listening, and nothing when none is, less
+  // one closing. The report redacts each secret.
+  #reportHoldings(closing?: WebSocket): void {
     if (this.ctx.getWebSockets(PAGE_TAG).length === 0) return;
     const sockets = this.ctx
       .getWebSockets()
-      .filter((socket) => !this.ctx.getTags(socket).includes(PAGE_TAG))
+      .filter((socket) => socket !== closing && !this.ctx.getTags(socket).includes(PAGE_TAG))
       .map((socket) => {
         const { client, secret, connectedAt } = socket.deserializeAttachment() as Attachment;
         return { client, connectedAt, ...(secret ? { secret } : {}) };

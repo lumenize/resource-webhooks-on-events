@@ -76,6 +76,13 @@ export interface Watcher extends Party {
   release(): Promise<void>;
   /** Pings B and waits for the pong, so B counts the socket live, reconnecting first if it dropped. */
   fresh(): Promise<void>;
+  /** Holds A's next reply to `method` from the client until the gate opens, as a slow reply. */
+  holdReply(method: string): Gate;
+  /**
+   * Closes the socket to B and keeps it closed, as a sleeping laptop's, or opens it again, after
+   * which the client catches up (R12).
+   */
+  offline(on: boolean): Promise<void>;
   close(): void;
 }
 
@@ -113,8 +120,11 @@ function authorizeInFrame(url: string): Promise<string> {
 
 const plainFetch: typeof fetch = (input, init) => fetch(input, init);
 
-/** A fetch that tells the page each MCP request and its reply, redacted. */
-function recording(hooks: ClientHooks | undefined): typeof fetch {
+/**
+ * A fetch that tells the page each MCP request and its reply, redacted. A reply whose method has
+ * a gate in `replyHolds` waits for it before the client reads it, as a slow reply would.
+ */
+function recording(hooks: ClientHooks | undefined, replyHolds?: Map<string, Gate>): typeof fetch {
   if (!hooks) return plainFetch;
   return async (input, init) => {
     const request = new Request(input, init);
@@ -132,6 +142,11 @@ function recording(hooks: ClientHooks | undefined): typeof fetch {
       exchange.failed = true;
       exchange.reply = `HTTP ${response.status}`;
     }
+    const hold = replyHolds?.get(method);
+    if (hold) {
+      replyHolds!.delete(method);
+      await hold.wait();
+    }
     hooks.replied(exchange);
     return response;
   };
@@ -142,9 +157,9 @@ function subOf(token: string): string {
 }
 
 /** Signs a client in to A, which approves at once. */
-export async function signIn(name: string, hooks?: ClientHooks): Promise<Party> {
+export async function signIn(name: string, hooks?: ClientHooks, replyHolds?: Map<string, Gate>): Promise<Party> {
   const session = new OAuthSession({ redirectUri: `${ORIGIN}/callback`, clientMetadataUrl: clientMetadataUrl(ORIGIN), authorize: authorizeInFrame, fetch: plainFetch });
-  const client = createMcpClient({ endpoint: ENDPOINT, clientInfo: { name, version: '0.0.0' }, oauth: session, fetch: recording(hooks) });
+  const client = createMcpClient({ endpoint: ENDPOINT, clientInfo: { name, version: '0.0.0' }, oauth: session, fetch: recording(hooks, replyHolds) });
   const token = await session.tokenFor(ENDPOINT);
   return { name, client, session, sub: subOf(token) };
 }
@@ -178,7 +193,8 @@ const PING_MS = 10_000;
  * catches up, as R12 asks on reconnecting to its gateway.
  */
 export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher> {
-  const party = await signIn(name, hooks);
+  const replyHolds = new Map<string, Gate>();
+  const party = await signIn(name, hooks, replyHolds);
   const instance = `i_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const socketUrl = `${ORIGIN}/gateway/B/ws/${instance}`;
   const secret = newSecret();
@@ -311,6 +327,22 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
       for (const event of held.splice(0)) await copies.event(event);
     },
     fresh,
+    holdReply: (method) => {
+      const gate = new Gate();
+      replyHolds.set(method, gate);
+      return gate;
+    },
+    offline: async (on) => {
+      if (on) {
+        closing = true;
+        clearInterval(heartbeat);
+        if (socket?.readyState === WebSocket.OPEN) socket.close(1000, 'Offline');
+        hooks.connected(false);
+      } else {
+        closing = false;
+        await reconnect();
+      }
+    },
     close: () => {
       closing = true;
       clearInterval(heartbeat);
