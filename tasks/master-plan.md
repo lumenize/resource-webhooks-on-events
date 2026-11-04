@@ -1082,11 +1082,11 @@ Choices the phase made where the task file left one open:
 - A demo that changes a ticket's `duplicateOf` or deletes a ticket meets the cascade residual.
 - This repo has no backlog, so no row closes.
 
-**Process changes**, each a proposal, since the files live in `../lumenize`:
+**Process changes**, proposed for `../lumenize`, where the files live, and settled with Larry on 2026-11-04:
 
-- `/build-task`'s verifier prompt: for a client with queues that run concurrently, ask the verifier to model one interleaving by hand in a scratch script. That is how Phase 7's verifier found the lost copy, and code reading alone would not have.
-- `/build-task`'s mutation section: a mutation tool's refusal is no verdict, so a loop around it reports REFUSED, never SURVIVED. Two phases lost time to that.
-- For a task file whose client logic has a deployed tier, run the deployed scenario at the end of the phase that lands the client, not only at the last phase.
+- `/build-task`'s verifier prompt now asks, for code that runs work concurrently, for one interleaving the tests don't arrange, fed by hand in a script that node runs on a `git archive` copy outside the tree (lumenize 500d95e). That is how Phase 7's verifier found the lost copy, while told to read code only.
+- `scripts/mutate.mjs` now reports a refusal as REFUSED, with no verdict, and exits 2, and so does a command that could not start, which it had reported as CAUGHT. `testing.md` says a loop around it must tell exit 2 from exit 1 (lumenize 6fbb353). Two phases lost time to refusals that a loop read as survivors.
+- Running the deployed scenario at the end of the phase that lands the client was dropped. At Phase 7's end the scenario never drove the client, so a run then could not have shown the logging order, and both orderings were cheap to fix at Phase 8.
 
 ## Notes kept out of the proposal
 
