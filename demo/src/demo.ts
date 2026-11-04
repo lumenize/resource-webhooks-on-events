@@ -316,7 +316,7 @@ function hooksFor(client: Client): ClientHooks {
         view.log.push({ text: `event ${short(entry.eventId)}: ${entry.outcome}`, tone: entry.outcome === 'skipped' ? 'skip' : 'catch' });
       } else if (entry.kind === 'trigger' && entry.trigger !== 'started') {
         // R12's catch-ups when events may have been missed: on reconnecting, a refresh or a gap.
-        view.log.push({ text: `${entry.trigger === 'gap' ? 'a gap' : entry.trigger}: caught up`, tone: 'catch' });
+        view.log.push({ text: `${entry.trigger === 'gap' ? 'a gap' : entry.trigger}: catches up`, tone: 'catch' });
       } else if (entry.kind === 'started over') {
         view.log.push({ text: `started over: ${entry.reason}`, tone: 'info' });
       } else if (entry.kind === 'read failed' || entry.kind === 'poll failed') {
@@ -709,23 +709,51 @@ const MISSED: Scene = {
   ],
 };
 
-export const SCENES: Scene[] = [HAPPY, AHEAD, CROSS, MISSED];
+// § *Starting over*, from § *A moment too old to answer from*: the operator's reset, as the tests
+// use it in place of a restore, mints a moment past every one before and answers nothing earlier,
+// and it forgets the accounts and subscriptions, so each client signs in again as it refreshes.
+const RESTORE: Scene = {
+  id: 'restore',
+  title: 'Starting over, after A is restored',
+  roles: { X: 'a client', Y: 'a client' },
+  ready: WATCHING,
+  watching: true,
+  steps: [
+    {
+      title: 'A is restored from a backup',
+      line: 'A’s timeline now starts past every moment before it, and the backup holds tickets 3 and 9, but not ticket-7.',
+      run: async () => {
+        const answer = await control('A', 'wipe');
+        if (answer.type !== 'done') throw new Error('A did not reset.');
+        const writer = await signIn('writer');
+        await write(writer, 'resources/create', 'ticket-3', { title: 'Printer jams', status: 'open' });
+        await write(writer, 'resources/create', 'ticket-9', { title: 'Paper out', status: 'open' });
+        await until(() => state.A.tickets.length === 2);
+      },
+    },
+    {
+      title: 'X refreshes, and starts over',
+      line: 'X catches up from a moment A no longer answers from, so A says momentExpired. X reads the collection again, and drops ticket-7.',
+      run: async (x) => {
+        await x.copies.refresh(TEMPLATE);
+        await until(() => Boolean(state.A.latest) && x.copies.caughtUpTo(TEMPLATE) === state.A.latest && !x.copies.copy(`${A_ROOT}/tickets/ticket-7`));
+      },
+    },
+    {
+      title: 'Y refreshes, and starts over too',
+      line: 'Until it refreshed, Y held copies A no longer has. Now both match A.',
+      run: async (_x, y) => {
+        await y.copies.refresh(TEMPLATE);
+        await until(() => Boolean(state.A.latest) && y.copies.caughtUpTo(TEMPLATE) === state.A.latest && !y.copies.copy(`${A_ROOT}/tickets/ticket-7`));
+      },
+    },
+  ],
+};
 
-/**
- * The scene menu, in the proposal's order: the happy path, then its less common cases, with
- * those the page has no scene for yet listed as such.
- */
-export const SCENE_MENU: { id?: string; title: string; why?: string }[] = [
-  { id: 'happy', title: HAPPY.title },
-  { title: 'A read that comes in pages', why: 'needs a page size smaller than three tickets' },
-  { title: 'A catch-up that stops short', why: 'needs a smaller page size too' },
-  { id: 'ahead', title: AHEAD.title },
-  { id: 'cross', title: CROSS.title },
-  { id: 'missed', title: MISSED.title },
-  { title: 'A template the server doesn’t list', why: 'not on this page yet' },
-  { title: 'Starting over, from a moment too old', why: 'needs a short cut-off window' },
-  { title: 'Resources a client may not read', why: 'not built in the prototype' },
-];
+export const SCENES: Scene[] = [HAPPY, AHEAD, CROSS, MISSED, RESTORE];
+
+/** The scene menu: the happy path, then the less common cases in the proposal's order. */
+export const SCENE_MENU: { id: string; title: string }[] = SCENES.map(({ id, title }) => ({ id, title }));
 
 openChannel('A');
 openChannel('B');

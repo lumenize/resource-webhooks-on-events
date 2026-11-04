@@ -100,7 +100,7 @@ function dot(wire: WireName, from: PartyName) {
       <div class="brand">
         <h1>Resource Events</h1>
         <select class="scene" :value="state.scene" :disabled="state.busy" aria-label="Scene" @change="onScene">
-          <option v-for="item in SCENE_MENU" :key="item.title" :value="item.id ?? item.title" :disabled="!item.id">{{ item.id ? item.title : `${item.title} (${item.why})` }}</option>
+          <option v-for="item in SCENE_MENU" :key="item.id" :value="item.id">{{ item.title }}</option>
         </select>
       </div>
       <div class="caption">

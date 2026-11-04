@@ -8,7 +8,11 @@ defineProps<{ tickets: Ticket[]; current?: Record<string, string> }>();
 <template>
   <table v-if="tickets.length">
     <tbody>
-      <tr v-for="ticket in tickets" :key="ticket.uri" :class="{ gone: ticket.deleted, stale: current && current[ticket.uri] && current[ticket.uri] !== ticket.revision }">
+      <tr
+        v-for="ticket in tickets"
+        :key="ticket.uri"
+        :class="{ gone: ticket.deleted, stale: current && current[ticket.uri] && current[ticket.uri] !== ticket.revision, lost: current && !ticket.deleted && !current[ticket.uri] }"
+      >
         <td class="id mono">{{ leaf(ticket.uri) }}</td>
         <td class="rev mono" :title="ticket.revision">{{ short(ticket.revision) }}</td>
         <td class="status">
@@ -92,7 +96,18 @@ tr.stale .rev {
   font-weight: 600;
 }
 
-/* The page's note, from comparing the copy with A's: the client itself can't know. */
+/* The page's notes, from comparing each copy with A's: the client itself can't know. */
+tr.lost .id::after {
+  content: ' (not on A)';
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+tr.lost .id {
+  color: var(--stale);
+}
+
 tr.stale .rev::after {
   content: ' (behind A)';
   font-family: var(--sans);
