@@ -19,7 +19,7 @@ import type {
  * The extension's provisional identifier, a key in `capabilities.extensions`, which commits a
  * server to its two methods and to listing its event with webhook delivery (R20).
  */
-export const RESOURCE_WEBHOOKS_EXTENSION = 'io.modelcontextprotocol/resource-webhooks';
+export const RESOURCE_EVENTS_EXTENSION = 'io.modelcontextprotocol/resource-events';
 
 /** The extension's event, one for each change on each subscription covering a resource it touched (R10, D19). */
 export const COLLECTION_UPDATED = 'mcp.resource.collection.updated';
@@ -50,8 +50,11 @@ export interface ChangeSetEntry {
   revision: string;
 }
 
-/** A resource's contents in a write, the shape `resources/read` returns. `contents.uri` equals `uri`. */
-export type WriteContents = TextResourceContents | BlobResourceContents;
+/**
+ * A resource's contents in a write: the shape `resources/read` returns, without `uri`, since the
+ * method's `uri` names the target.
+ */
+export type WriteContents = Omit<TextResourceContents, 'uri'> | Omit<BlobResourceContents, 'uri'>;
 
 export interface StatResourceRequest extends JSONRPCRequest {
   method: 'resources/stat';
@@ -95,10 +98,10 @@ export interface WriteResourceResult extends Result {
 
 export interface DeleteResourceRequestParams extends ResourceRequestParams {
   /** The revision the resource must be at, for the delete to apply. */
-  ifMatch?: string;
+  ifMatch: string;
 }
 
-/** Deletes the resource, with `ifMatch` only if its revision equals it. */
+/** Deletes the resource, only if its revision equals `ifMatch`. */
 export interface DeleteResourceRequest extends JSONRPCRequest {
   method: 'resources/delete';
   params: DeleteResourceRequestParams;

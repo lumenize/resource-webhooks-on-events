@@ -16,7 +16,7 @@ const ticket = (title: string, status: 'open' | 'closed' = 'open') => ({ title, 
 /** A write by `party`, as the strawman's update, and what it sent, so a test can pass it to `wrote`. */
 async function updateAs(party: Party, lane: Lane, path: string, value: object, ifMatch: string) {
   const uri = `${lane.root}/${path}`;
-  const contents = { uri, mimeType: 'application/json', text: JSON.stringify(value) };
+  const contents = { mimeType: 'application/json', text: JSON.stringify(value) };
   const reply = (await party.client.request('resources/update', { uri, contents, ifMatch })) as unknown as { revision: string; changes: ChangeSetEntry[] };
   return { uri, contents, reply };
 }
@@ -228,7 +228,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expired.release();
     await last.reached;
     const uri = `${lane.root}/tickets/ticket-9`;
-    const contents = { uri, mimeType: 'application/json', text: JSON.stringify(ticket('Written meanwhile')) };
+    const contents = { mimeType: 'application/json', text: JSON.stringify(ticket('Written meanwhile')) };
     const written = (await x.party.client.request('resources/create', { uri, contents })) as unknown as { revision: string; changes: ChangeSetEntry[] };
     x.copies.wrote(uri, contents, written.changes);
     last.release();

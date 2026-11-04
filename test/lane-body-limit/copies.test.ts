@@ -15,7 +15,7 @@ describe('on the shared layout', () => {
     const opened = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     await x.copies.watch(namedAt(lane, '{type}/{id}'));
     const uri = `${lane.root}/tickets/ticket-3`;
-    const contents = { uri, mimeType: 'application/json', text: JSON.stringify({ title: 'Printer jams', status: 'closed' }) };
+    const contents = { mimeType: 'application/json', text: JSON.stringify({ title: 'Printer jams', status: 'closed' }) };
     // The catch-up the event brings is held at its reply, and nothing is logged until it ends.
     const caughtUp = x.gate.hold('resources/collection/catchup', 'reply');
     const reply = (await x.party.client.request('resources/update', { uri, contents, ifMatch: opened.revision })) as unknown as { revision: string; changes: ChangeSetEntry[] };

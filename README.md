@@ -2,7 +2,7 @@
 
 A working prototype of an MCP extension that lets a client keep copies of resources current by webhook. The server records each change to its resources at a moment on a timeline, a string that sorts after every moment before it, such as `"108"`. For each change, it POSTs an event, `mcp.resource.collection.updated`, through the webhook delivery of [SEP-3415](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415), Events. The event names each changed resource and its new revision, and carries none of its contents, so a lost, repeated or late one does no harm. A client that lacks a revision catches up on the whole collection with one call, `resources/collection/catchup`, from the moment it is caught up to.
 
-The extension is drafted as a proposal to MCP's Tasks and Events working group, [Resource Webhooks on Events](https://github.com/lumenize/experimental-ext-triggers-events/blob/resource-webhooks-on-events/proposals/XXXX-resource-webhooks.md). Writes use the Filesystems working group's strawman of resource operations, with each resource's moment as its revision. The proposal's § *Reference Implementation* says what this prototype has tested and what it hasn't.
+The extension is drafted as a proposal to MCP's Tasks and Events working group, [Resource Events](https://github.com/lumenize/experimental-ext-triggers-events/blob/resource-webhooks-on-events/proposals/XXXX-resource-events.md). Writes use the Filesystems working group's strawman of resource operations, with each resource's moment as its revision. The proposal's § *Reference Implementation* says what this prototype has tested and what it hasn't.
 
 This is the second flavor of the work. The first, [resource-webhooks-standalone](https://github.com/lumenize/resource-webhooks-standalone), gave resources webhook methods of their own, with deliveries that carried each change's contents.
 
@@ -39,7 +39,7 @@ One Cloudflare Worker hosts the server and the gateway, each a Durable Object:
 
 | Part | Where | What it does |
 |---|---|---|
-| A, the server | `/server/A`, in `src/server.ts` and `src/server-role/` | serves tickets and notes as MCP resources, with the strawman's four write methods and zero-padded counters for moments; serves `resources/collection/read` and `resources/collection/catchup`; takes SEP-3415's `events/subscribe`, and delivers each event with retries held to SEP-3415's bounds; runs its own authorization server, in `src/auth/`, where clients register by Client ID Metadata Document |
+| A, the server | `/server/A`, in `src/server.ts` and `src/server-role/` | serves tickets and notes as MCP resources, with the strawman's four methods and zero-padded counters for moments; serves `resources/collection/read` and `resources/collection/catchup`; takes SEP-3415's `events/subscribe`, and delivers each event with retries held to SEP-3415's bounds; runs its own authorization server, in `src/auth/`, where clients register by Client ID Metadata Document |
 | B, the gateway | `/gateway/B`, in `src/gateway.ts` and `src/gateway-role/` | a gateway in SEP-3415's forward-proxy deployment: takes each client's webhooks, checks each signature, and passes the event down that client's WebSocket |
 | the client | `src/client/` | `mcp-client.ts` speaks MCP to A, and `copies.ts` keeps copies by the client's rules: it skips an event whose revisions it holds, catches up, applies patches, and starts over when told to |
 

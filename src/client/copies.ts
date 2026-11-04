@@ -9,7 +9,7 @@
 // starts the collection over (R21, R14, R23). It imports, besides types, the copied merge patch,
 // the template matcher and the revision's `_meta` key, by `.ts` paths, so Node runs it with types
 // stripped.
-import type { CatchUpCollectionResult, ChangeSetEntry, CollectionChange, CollectionUpdatedData, ReadCollectionResult, UriSpecification } from '../extension-types.ts';
+import type { CatchUpCollectionResult, ChangeSetEntry, CollectionChange, CollectionUpdatedData, ReadCollectionResult, UriSpecification, WriteContents } from '../extension-types.ts';
 import { RESOURCE_REVISION_META_KEY } from '../extension-types.ts';
 import { templateCovers, templateMatcher } from '../server-role/uri-templates.ts';
 import { applyMergePatch, type JsonValue } from '../vendor/lumenize-merge-patch/merge-patch.ts';
@@ -150,15 +150,15 @@ export class Copies {
   }
 
   /**
-   * Takes what the client sent in its own write to `uri` as its copy, at the revision the reply's
-   * change-set entry gives that resource, a tombstone for a delete (R9). It takes nothing else
-   * from the reply, though the reply lists every resource the write changed, and moves no moment
-   * it is caught up to.
+   * Takes what the client sent in its own write to `uri`, with `uri` added, as its copy, at the
+   * revision the reply's change-set entry gives that resource, a tombstone for a delete (R9). It
+   * takes nothing else from the reply, though the reply lists every resource the write changed,
+   * and moves no moment it is caught up to.
    */
-  wrote(uri: string, contents: Contents | undefined, changes: readonly ChangeSetEntry[]): void {
+  wrote(uri: string, contents: WriteContents | undefined, changes: readonly ChangeSetEntry[]): void {
     const own = changes.find((entry) => entry.uri === uri);
     if (!own) return;
-    this.#set(uri, contents && own.effect !== 'deleted' ? { revision: own.revision, deleted: false, contents } : { revision: own.revision, deleted: true });
+    this.#set(uri, contents && own.effect !== 'deleted' ? { revision: own.revision, deleted: false, contents: { ...contents, uri } } : { revision: own.revision, deleted: true });
   }
 
   /**

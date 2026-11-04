@@ -102,7 +102,7 @@ export async function signedIn(tier: Tier, name: string): Promise<Party> {
  * answers its revision.
  */
 export async function write(party: Party, uri: string, title = 'Buy milk', done = false): Promise<string> {
-  const contents = { uri, mimeType: 'application/json', text: JSON.stringify({ title, done }) };
+  const contents = { mimeType: 'application/json', text: JSON.stringify({ title, done }) };
   try {
     return (await party.client.request<WriteResourceResult>('resources/create', { uri, contents })).revision;
   } catch (error) {

@@ -112,7 +112,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(again.changes).toEqual([{ uri: `${lane.root}/tickets/ticket-3`, effect: 'created', revision: again.revision }]);
   });
 
-  it('R7: refuses a stale ifMatch with revisionMismatch, a create where one exists with alreadyExists, and a missing resource with notFound', async () => {
+  it('R7: refuses a stale ifMatch with revisionMismatch, a delete with no ifMatch, a create where one exists with alreadyExists, and a missing resource with notFound', async () => {
     const lane = newLane(layout);
     const uri = `${lane.root}/tickets/ticket-3`;
     const created = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
@@ -120,13 +120,17 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const mismatch = { code: -32010, data: { reason: 'revisionMismatch', uri, currentRevision: updated.revision } };
     expect(await refusal(update(lane, 'tickets/ticket-3', { title: 'x', status: 'open' }, created.revision))).toEqual(mismatch);
     expect(await refusal(remove(lane, 'tickets/ticket-3', created.revision))).toEqual(mismatch);
+    // The strawman requires `ifMatch` on a delete, as on an update, so one without it is refused
+    // and the ticket stays.
+    expect((await refusal(lane.client.request('resources/delete', { uri }))).code).toBe(-32602);
+    expect((await stat(lane, 'tickets/ticket-3')).revision).toBe(updated.revision);
     expect(await refusal(create(lane, 'tickets/ticket-3', { title: 'x', status: 'open' }))).toEqual({
       code: -32010,
       data: { reason: 'alreadyExists', uri, currentRevision: updated.revision },
     });
     const missing = { code: -32602, data: { reason: 'notFound', uri: `${lane.root}/tickets/ticket-4` } };
     expect(await refusal(update(lane, 'tickets/ticket-4', { title: 'x', status: 'open' }, created.revision))).toEqual(missing);
-    expect(await refusal(remove(lane, 'tickets/ticket-4'))).toEqual(missing);
+    expect(await refusal(remove(lane, 'tickets/ticket-4', created.revision))).toEqual(missing);
     expect(await refusal(stat(lane, 'tickets/ticket-4'))).toEqual(missing);
   });
 
@@ -193,7 +197,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
 
     // A write that leaves duplicateOf as it was looks for no ticket, so it goes through after
     // ticket-9 is deleted, and changes ticket-7 alone.
-    await remove(lane, 'tickets/ticket-9');
+    await remove(lane, 'tickets/ticket-9', (await stat(lane, 'tickets/ticket-9')).revision);
     const renamed = await update(lane, 'tickets/ticket-7', { title: 'Again, renamed', status: 'closed', duplicateOf: 'ticket-9' }, seven);
     expect(renamed.changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-7`]);
   });
@@ -257,28 +261,27 @@ describe('what A writes, and where', () => {
       ['resources/stat', {}],
       ['resources/create', { contents }],
       ['resources/update', { contents, ifMatch: '000000000001' }],
-      ['resources/delete', {}],
+      ['resources/delete', { ifMatch: '000000000001' }],
     ] as const) {
       expect(await refusal(lane.client.request(method, { uri: 'ticket-3', ...params }))).toEqual({ code: -32602, data: { reason: 'invalidUri', uri: 'ticket-3' } });
     }
     // A refusal of another member keeps the schema's errors.
-    const missing = await refusal(lane.client.request('resources/create', { uri: contents.uri }));
+    const missing = await refusal(lane.client.request('resources/create', { uri: `${lane.root}/tickets/ticket-3` }));
     expect(missing.code).toBe(-32602);
     expect(Array.isArray(missing.data)).toBe(true);
   });
 
-  it('refuses contents that are not the type the path names, contents for another uri, and a uri A cannot write', async () => {
+  it('refuses contents that are not the type the path names, and a uri A cannot write', async () => {
     const lane = newLane();
     const uri = `${lane.root}/tickets/ticket-3`;
     const send = (params: Record<string, unknown>) => refusal(lane.client.request('resources/create', params));
     expect((await send({ uri, contents: contentsFor(lane, 'tickets/ticket-3', { title: 'No status' } as Ticket) })).code).toBe(-32602);
     expect((await send({ uri, contents: contentsFor(lane, 'tickets/ticket-3', '{"title":') })).code).toBe(-32602);
-    expect((await send({ uri, contents: { uri, mimeType: 'text/plain', text: '{}' } })).code).toBe(-32602);
-    expect(await send({ uri, contents: contentsFor(lane, 'tickets/ticket-4', { title: 'x', status: 'open' }) })).toEqual({ code: -32602, data: { reason: 'invalidUri', uri } });
+    expect((await send({ uri, contents: { mimeType: 'text/plain', text: '{}' } })).code).toBe(-32602);
     // `{type}/{id}` covers lists/x on the shared map, but A has no lists, nor anything beneath a ticket.
     for (const path of ['lists/x', 'tickets/ticket-3/x', 'elsewhere']) {
       const other = `${lane.root}/${path}`;
-      expect(await send({ uri: other, contents: { uri: other, mimeType: 'application/json', text: '{"title":"x"}' } })).toEqual({ code: -32011, data: { reason: 'notSupported', uri: other } });
+      expect(await send({ uri: other, contents: { mimeType: 'application/json', text: '{"title":"x"}' } })).toEqual({ code: -32011, data: { reason: 'notSupported', uri: other } });
     }
     expect(await refusal(lane.client.request('resources/stat', { uri: 'https://elsewhere.example/tickets/ticket-3' }))).toMatchObject({ code: -32011 });
   });

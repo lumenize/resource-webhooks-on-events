@@ -11,7 +11,7 @@ import type { Lane } from './lane';
 export const REVISION = 'io.modelcontextprotocol/resource-revision';
 
 export function contentsFor(lane: Lane, path: string, value: Ticket | Note | string) {
-  return { uri: `${lane.root}/${path}`, mimeType: 'application/json', text: typeof value === 'string' ? value : JSON.stringify(value) };
+  return { mimeType: 'application/json', text: typeof value === 'string' ? value : JSON.stringify(value) };
 }
 
 export function create(lane: Lane, path: string, value: Ticket | Note | string): Promise<WriteResourceResult> {
@@ -22,8 +22,8 @@ export function update(lane: Lane, path: string, value: Ticket | Note | string, 
   return lane.client.request('resources/update', { uri: `${lane.root}/${path}`, contents: contentsFor(lane, path, value), ifMatch });
 }
 
-export function remove(lane: Lane, path: string, ifMatch?: string): Promise<DeleteResourceResult> {
-  return lane.client.request('resources/delete', { uri: `${lane.root}/${path}`, ...(ifMatch === undefined ? {} : { ifMatch }) });
+export function remove(lane: Lane, path: string, ifMatch: string): Promise<DeleteResourceResult> {
+  return lane.client.request('resources/delete', { uri: `${lane.root}/${path}`, ifMatch });
 }
 
 export function stat(lane: Lane, path: string): Promise<StatResourceResult> {

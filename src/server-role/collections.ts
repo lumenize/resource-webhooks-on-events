@@ -45,7 +45,7 @@ export interface CollectionLimits {
   momentChangeCap: number;
 }
 
-export interface ResourceWebhooksOptions {
+export interface CollectionsOptions {
   store: Timelines;
   /** A's own uri, which every uri and uriTemplate A serves starts with. */
   root: string;
@@ -68,10 +68,10 @@ interface Position {
   after: string;
 }
 
-export class ResourceWebhooks {
-  readonly #options: ResourceWebhooksOptions;
+export class Collections {
+  readonly #options: CollectionsOptions;
 
-  constructor(options: ResourceWebhooksOptions) {
+  constructor(options: CollectionsOptions) {
     for (const [name, value] of Object.entries(options.limits)) {
       if (!Number.isInteger(value) || value < 1) throw new RangeError(`The ${name} must be a positive integer, not ${value}`);
     }

@@ -41,7 +41,7 @@ describe('the core methods', () => {
       supportedVersions: ['2026-07-28'],
       capabilities: {
         resources: {},
-        extensions: { 'io.modelcontextprotocol/resource-operations': {}, 'io.modelcontextprotocol/events': {}, 'io.modelcontextprotocol/resource-webhooks': {} },
+        extensions: { 'io.modelcontextprotocol/resource-operations': {}, 'io.modelcontextprotocol/events': {}, 'io.modelcontextprotocol/resource-events': {} },
       },
       ttlMs: 0,
       cacheScope: 'public',

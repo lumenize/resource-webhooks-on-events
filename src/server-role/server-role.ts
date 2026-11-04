@@ -7,7 +7,7 @@
 // compose it as A does here.
 import { EVENTS_EXTENSION, type EventsSubscribeRequestParams, type EventsUnsubscribeRequestParams } from '../events-types';
 import {
-  RESOURCE_WEBHOOKS_EXTENSION,
+  RESOURCE_EVENTS_EXTENSION,
   type CatchUpCollectionRequestParams,
   type ReadCollectionRequestParams,
   NOT_SUPPORTED,
@@ -46,7 +46,7 @@ import type {
 import { INVALID_PARAMS, LATEST_PROTOCOL_VERSION, METHOD_NOT_FOUND } from '../vendor/mcp-spec/2026-07-28/schema';
 import { clampSchedule, Deliveries, type DeliveryReport, type Send } from './deliveries';
 import { Events } from './events';
-import { ResourceWebhooks, type CollectionLimits } from './resource-webhooks';
+import { Collections, type CollectionLimits } from './collections';
 import { Subscriptions, type Subscription } from './subscriptions';
 import { requestErrors, resourceErrors } from './validation';
 import { Timelines, type Row, type TimelineMap, type Write, type Written } from './version-store';
@@ -140,7 +140,7 @@ const UNCACHED = { ttlMs: 0, cacheScope: 'public' } as const;
 
 export class ServerRole {
   readonly store: Timelines;
-  readonly #webhooks: ResourceWebhooks;
+  readonly #collections: Collections;
   readonly #deliveries: Deliveries;
   readonly #subscriptions: Subscriptions;
   readonly #events: Events;
@@ -157,7 +157,7 @@ export class ServerRole {
     this.#transactionSync = options.transactionSync;
     this.#extras = options.extras ?? {};
     this.store = new Timelines(options.sql, { map: options.map, cutoffWindowMs: options.cutoffWindowMs });
-    this.#webhooks = new ResourceWebhooks({ store: this.store, root: options.root, map: options.map, limits: options.limits });
+    this.#collections = new Collections({ store: this.store, root: options.root, map: options.map, limits: options.limits });
     this.#deliveries = new Deliveries({
       send: options.send,
       waitUntil: options.waitUntil,
@@ -172,7 +172,7 @@ export class ServerRole {
       maxTtlMs: options.maxTtlMs,
       subscriptionCap: options.subscriptionCap,
     });
-    this.#events = new Events({ deliveries: this.#deliveries, subscriptions: this.#subscriptions, collections: this.#webhooks, eventBodyLimit: options.eventBodyLimit });
+    this.#events = new Events({ deliveries: this.#deliveries, subscriptions: this.#subscriptions, collections: this.#collections, eventBodyLimit: options.eventBodyLimit });
     const methods: [string, Method][] = [
       ['server/discover', () => this.#discover()],
       ['resources/list', (params) => this.#listResources(params)],
@@ -182,8 +182,8 @@ export class ServerRole {
       ['resources/create', (params) => this.#create(params as unknown as CreateResourceRequestParams)],
       ['resources/update', (params) => this.#update(params as unknown as UpdateResourceRequestParams)],
       ['resources/delete', (params) => this.#delete(params as unknown as DeleteResourceRequestParams)],
-      ['resources/collection/read', (params) => this.#webhooks.read(params as unknown as ReadCollectionRequestParams)],
-      ['resources/collection/catchup', (params) => this.#webhooks.catchUp(params as unknown as CatchUpCollectionRequestParams)],
+      ['resources/collection/read', (params) => this.#collections.read(params as unknown as ReadCollectionRequestParams)],
+      ['resources/collection/catchup', (params) => this.#collections.catchUp(params as unknown as CatchUpCollectionRequestParams)],
       ['events/list', (params) => (requireNoCursor(params), this.#events.list())],
       ['events/subscribe', (params, principal) => this.#events.subscribe(params as unknown as EventsSubscribeRequestParams, principal)],
       ['events/unsubscribe', (params, principal) => this.#events.unsubscribe(params as unknown as EventsUnsubscribeRequestParams, principal)],
@@ -242,7 +242,7 @@ export class ServerRole {
       resources: {},
       ...(this.#tools().length > 0 ? { tools: {} } : {}),
       // Events with an empty settings object, since A sends no list-change notifications.
-      extensions: { [RESOURCE_OPERATIONS_EXTENSION]: {}, [EVENTS_EXTENSION]: {}, [RESOURCE_WEBHOOKS_EXTENSION]: {} },
+      extensions: { [RESOURCE_OPERATIONS_EXTENSION]: {}, [EVENTS_EXTENSION]: {}, [RESOURCE_EVENTS_EXTENSION]: {} },
     };
     return { resultType: 'complete', supportedVersions: [LATEST_PROTOCOL_VERSION], capabilities, ...UNCACHED };
   }
@@ -316,12 +316,13 @@ export class ServerRole {
     });
   }
 
+  // Only at `ifMatch`, which the strawman requires, as on update.
   #delete({ uri, ifMatch }: DeleteResourceRequestParams): DeleteResourceResult {
     const path = this.#ownPath(uri);
     const { changes } = this.#write(path, (write) => {
       const current = this.#live(path);
       if (!current) throw notFound(uri);
-      if (ifMatch !== undefined && current.moment !== ifMatch) throw revisionMismatch(uri, current.moment);
+      if (current.moment !== ifMatch) throw revisionMismatch(uri, current.moment);
       write.delete(path);
     });
     return { resultType: 'complete', changes };
@@ -372,10 +373,9 @@ export class ServerRole {
     write.put(path, text);
   }
 
-  // The contents a write sent, kept as sent (R17), once they are one JSON text entry for this uri
-  // that parses as the type its path names, within the size bound.
+  // The contents a write sent, kept as sent (R17), once they are one JSON text entry that parses
+  // as the type its path names, within the size bound.
   #checked(path: string, uri: string, contents: WriteContents): { text: string; value: Ticket | Note } {
-    if (contents.uri !== uri) throw new JsonRpcError(INVALID_PARAMS, 'The contents are for another uri', { reason: 'invalidUri', uri });
     if (!('text' in contents) || contents.mimeType !== 'application/json') {
       throw new JsonRpcError(INVALID_PARAMS, 'A ticket or a note is one application/json text entry', { uri });
     }

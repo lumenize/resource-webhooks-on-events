@@ -25,7 +25,7 @@ export async function eventsScenario(tier: Tier): Promise<void> {
   const a = await signedIn(tier, 'a');
   const uri = (id: string) => `${tier.root}/tickets/${id}`;
   const write = (method: string, id: string, value: object, ifMatch?: string) =>
-    a.client.request<WriteResourceResult>(method, { uri: uri(id), contents: { uri: uri(id), ...json(value) }, ...(ifMatch ? { ifMatch } : {}) });
+    a.client.request<WriteResourceResult>(method, { uri: uri(id), contents: json(value), ...(ifMatch ? { ifMatch } : {}) });
   const three = await write('resources/create', 'ticket-3', { title: 'Printer jams', status: 'open' });
   await write('resources/create', 'ticket-9', { title: 'Paper out', status: 'open' });
   const seven = await write('resources/create', 'ticket-7', { title: 'Paper out again', status: 'open' });
@@ -57,7 +57,7 @@ export async function eventsScenario(tier: Tier): Promise<void> {
   // Step 4: Y closes ticket-3, and takes what it sent as its copy, staying caught up to where it
   // was (R9). Y holds the event until its reply is in, so step 6 shows the writer's skip.
   y.forward(false);
-  const closed = { uri: uri('ticket-3'), ...json({ title: 'Printer jams', status: 'closed' }) };
+  const closed = json({ title: 'Printer jams', status: 'closed' });
   const reply = await y.party.client.request<WriteResourceResult>('resources/update', { uri: uri('ticket-3'), contents: closed, ifMatch: three.revision });
   y.copies.wrote(uri('ticket-3'), closed, reply.changes);
   expect(y.copies.caughtUpTo(template)).toBe(duplicate.revision);

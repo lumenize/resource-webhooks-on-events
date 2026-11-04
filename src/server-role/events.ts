@@ -19,7 +19,7 @@ import {
 import { COLLECTION_UPDATED, type ChangeSetEntry, type CollectionUpdatedData, type UriSpecification } from '../extension-types';
 import { INVALID_PARAMS, type Result } from '../vendor/mcp-spec/2026-07-28/schema';
 import { randomId, type Deliveries, type Message } from './deliveries';
-import { MAX_NAMED_TEMPLATE_BYTES, MAX_NAMED_URI_BYTES, type ResourceWebhooks } from './resource-webhooks';
+import { MAX_NAMED_TEMPLATE_BYTES, MAX_NAMED_URI_BYTES, type Collections } from './collections';
 import type { SubscriptionKey, Subscriptions } from './subscriptions';
 import { extensionSchemaFor } from './validation';
 
@@ -68,7 +68,7 @@ export interface EventsOptions {
   deliveries: Deliveries;
   subscriptions: Subscriptions;
   /** What tells A which resources a uri-specification covers, as a catch-up reads it. */
-  collections: ResourceWebhooks;
+  collections: Collections;
   /** The largest body an event may have, in UTF-8 bytes, past which it leaves `changes` out. */
   eventBodyLimit: number;
 }

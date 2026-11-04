@@ -43,6 +43,15 @@ afterEach(() => {
 });
 
 describe('messages that cross, fed by hand', () => {
+  it('R9: takes what its own write sent as its copy, with the uri a read would carry', async () => {
+    const { copies } = fed([read(107, [contentsAt('Printer jams', 101)])], [caught(107)]);
+    await copies.watch(TICKETS);
+    // A write's contents leave `uri` out, as the strawman has it, since the method names it.
+    const sent = { mimeType: 'application/json', text: JSON.stringify({ title: 'Its own', status: 'open' }) };
+    copies.wrote(URI, sent, [{ uri: URI, effect: 'updated', revision: moment(109) }]);
+    expect(copies.copy(URI)).toMatchObject({ revision: moment(109), deleted: false, contents: contentsAt('Its own') });
+  });
+
   it("R15: ignores its own write's reply when it already holds a later revision", async () => {
     const { copies } = fed([read(107, [contentsAt('Printer jams', 101)])], [caught(107)]);
     await copies.watch(TICKETS);
