@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import PartyBox from './components/PartyBox.vue';
 import TicketTable from './components/TicketTable.vue';
 import WireLabel from './components/WireLabel.vue';
@@ -21,15 +21,42 @@ interface Wire {
   lx: number;
   ly: number;
   align?: 'left' | 'right' | 'center';
+  /** Which ends carry an arrowhead: the receiving end, or both for MCP's requests and replies. */
+  arrows: 'to' | 'both';
 }
 
 const WIRES: Record<WireName, Wire> = {
-  'A-B': { from: 'A', to: 'B', x0: 41, y0: 20, x1: 59, y1: 20, color: 'A', label: 'A → B', kind: 'webhook', lx: 50, ly: 20 },
-  'X-A': { from: 'X', to: 'A', x0: 14, y0: 60, x1: 14, y1: 40, color: 'X', label: 'X ⇄ A', kind: 'MCP', lx: 14, ly: 50, align: 'left' },
-  'Y-A': { from: 'Y', to: 'A', x0: 66, y0: 60, x1: 34, y1: 40, color: 'Y', label: 'Y ⇄ A', kind: 'MCP', lx: 58, ly: 55 },
-  'B-X': { from: 'B', to: 'X', x0: 66, y0: 40, x1: 34, y1: 60, color: 'B', label: 'B → X', kind: 'socket', lx: 42, ly: 55 },
-  'B-Y': { from: 'B', to: 'Y', x0: 86, y0: 40, x1: 86, y1: 60, color: 'B', label: 'B → Y', kind: 'socket', lx: 86, ly: 50, align: 'right' },
+  'A-B': { from: 'A', to: 'B', x0: 41, y0: 20, x1: 59, y1: 20, color: 'A', label: 'A → B', kind: 'webhook', lx: 50, ly: 20, arrows: 'to' },
+  'X-A': { from: 'X', to: 'A', x0: 14, y0: 60, x1: 14, y1: 40, color: 'X', label: 'X ⇄ A', kind: 'MCP', lx: 14, ly: 50, align: 'left', arrows: 'both' },
+  'Y-A': { from: 'Y', to: 'A', x0: 66, y0: 60, x1: 34, y1: 40, color: 'Y', label: 'Y ⇄ A', kind: 'MCP', lx: 58, ly: 55, arrows: 'both' },
+  'B-X': { from: 'B', to: 'X', x0: 66, y0: 40, x1: 34, y1: 60, color: 'B', label: 'B → X', kind: 'WebSocket', lx: 42, ly: 55, arrows: 'to' },
+  'B-Y': { from: 'B', to: 'Y', x0: 86, y0: 40, x1: 86, y1: 60, color: 'B', label: 'B → Y', kind: 'WebSocket', lx: 86, ly: 50, align: 'right', arrows: 'to' },
 };
+const COLORS = ['A', 'B', 'X', 'Y'] as const;
+
+// The wires are drawn in the stage's own pixels, measured as it resizes, so the arrowheads keep
+// their shape at any size.
+const stage = ref<HTMLElement>();
+const size = ref({ w: 1600, h: 800 });
+let observer: ResizeObserver | undefined;
+onMounted(() => {
+  observer = new ResizeObserver(([entry]) => (size.value = { w: entry.contentRect.width, h: entry.contentRect.height }));
+  if (stage.value) observer.observe(stage.value);
+  document.addEventListener('click', unpin);
+});
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  document.removeEventListener('click', unpin);
+});
+const px = (w: Wire) => ({ x1: (w.x0 / 100) * size.value.w, y1: (w.y0 / 100) * size.value.h, x2: (w.x1 / 100) * size.value.w, y2: (w.y1 / 100) * size.value.h });
+
+// One popover pinned at a time, and a click anywhere else unpins it.
+function unpin(): void {
+  state.pinned = undefined;
+}
+function toggle(name: WireName): void {
+  state.pinned = state.pinned === name ? undefined : name;
+}
 
 const CLIENTS = ['X', 'Y'] as const;
 const token = ref(state.operatorToken);
@@ -81,18 +108,21 @@ function dot(wire: WireName, from: PartyName) {
       </div>
     </header>
 
-    <main class="stage">
-      <svg class="wires" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+    <main ref="stage" class="stage">
+      <svg class="wires" :viewBox="`0 0 ${size.w} ${size.h}`" aria-hidden="true">
+        <defs>
+          <marker v-for="c in COLORS" :id="`arrow-${c}`" :key="c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="14" markerHeight="14" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+            <path d="M0 0 L10 5 L0 10 z" :style="{ fill: `var(--${c})` }" />
+          </marker>
+        </defs>
         <line
           v-for="(w, name) in WIRES"
           :key="name"
-          :x1="w.x0"
-          :y1="w.y0"
-          :x2="w.x1"
-          :y2="w.y1"
+          v-bind="px(w)"
           :style="{ stroke: `var(--${w.color})`, color: `var(--${w.color})` }"
           :class="{ lit: lit.has(name) }"
-          vector-effect="non-scaling-stroke"
+          :marker-end="`url(#arrow-${w.color})`"
+          :marker-start="w.arrows === 'both' ? `url(#arrow-${w.color})` : undefined"
         />
       </svg>
       <div v-for="p in state.pulses" :key="p.id" class="dot" :style="dot(p.wire, p.from)"></div>
@@ -116,20 +146,15 @@ function dot(wire: WireName, from: PartyName) {
 
       <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected">
         <p class="note">Takes each client's webhooks, checks each signature, and passes the event down that client's socket.</p>
-        <h3>sockets</h3>
-        <ul class="plain">
-          <li v-for="client in ['X', 'Y']" :key="client">
-            <span class="who" :style="{ color: `var(--${client})` }">{{ client }}</span>
-            <span :class="state.B.sockets.includes(client) ? 'ok' : 'none'">{{ state.B.sockets.includes(client) ? 'connected' : 'not connected' }}</span>
-          </li>
-        </ul>
-        <h3>last delivery</h3>
-        <ul class="plain">
-          <li v-for="client in ['X', 'Y']" :key="client">
-            <span class="who" :style="{ color: `var(--${client})` }">{{ client }}</span>
-            <span class="mono">{{ state.B.lastStatus[client] ?? '—' }}</span>
-          </li>
-        </ul>
+        <div class="pair">
+          <div v-for="client in CLIENTS" :key="client" class="half">
+            <div class="half-head"><span class="who" :style="{ color: `var(--${client})` }">{{ client }}</span></div>
+            <h3>socket</h3>
+            <div :class="state.B.sockets.includes(client) ? 'ok' : 'none'">{{ state.B.sockets.includes(client) ? 'connected' : 'not connected' }}</div>
+            <h3>last delivery</h3>
+            <div class="mono">{{ state.B.lastStatus[client] ?? '—' }}</div>
+          </div>
+        </div>
       </PartyBox>
 
       <PartyBox v-for="client in CLIENTS" :key="client" :name="client" :role="client === 'Y' ? 'a client, and the writer' : 'a client'" :color="client" :area="client === 'X' ? '3 / 1' : '3 / 3'" :online="state[client].ready">
@@ -156,8 +181,9 @@ function dot(wire: WireName, from: PartyName) {
         :y="w.ly"
         :align="w.align"
         :above="w.ly >= 50"
-        :focused="state.focus === name"
+        :pinned="state.pinned === name"
         :view="state.wires[name]"
+        @toggle="toggle(name)"
       />
     </main>
 
@@ -166,12 +192,12 @@ function dot(wire: WireName, from: PartyName) {
         v-for="s in STEPS"
         :key="s.n"
         class="step"
-        :class="{ done: state.done >= s.n, next: state.done + 1 === s.n }"
-        :disabled="state.busy || state.done + 1 !== s.n"
+        :class="{ done: state.done >= s.n, next: state.done + 1 === s.n, auto: 'auto' in s }"
+        :disabled="state.busy || state.done + 1 !== s.n || 'auto' in s"
         @click="step(s.n)"
       >
         <span class="n">{{ state.done >= s.n ? '✓' : s.n }}</span>
-        <span class="t">{{ s.title }}</span>
+        <span class="t">{{ s.title }}<span v-if="'auto' in s" class="by-itself">happens by itself</span></span>
       </button>
     </footer>
   </div>
@@ -290,7 +316,7 @@ function dot(wire: WireName, from: PartyName) {
 
 .wires line {
   stroke-width: 2.5;
-  opacity: 0.35;
+  opacity: 0.45;
   stroke-dasharray: 6 6;
   transition: opacity 200ms;
 }
@@ -482,5 +508,36 @@ h3 code {
 
 .step.next:hover:not(:disabled) {
   background: #1d2536;
+}
+
+.by-itself {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--faint);
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-top: 8px;
+}
+
+.half {
+  padding: 10px 14px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0d121c;
+}
+
+.half-head {
+  font-size: 18px;
+  margin-bottom: 2px;
+}
+
+.half h3 {
+  margin-top: 8px;
 }
 </style>

@@ -2,10 +2,11 @@
 import { computed, ref, watch } from 'vue';
 import type { WireView } from '../demo.ts';
 
-// `focused` opens the label's popover until the page moves on, as step 5 does for the event.
-const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; above?: boolean; align?: 'left' | 'right' | 'center'; focused?: boolean }>();
+// Hovering a label opens its popover, and clicking pins it open. The page holds which one is
+// pinned, so pinning one unpins the others, and a click anywhere else unpins it.
+const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; above?: boolean; align?: 'left' | 'right' | 'center'; pinned?: boolean }>();
+const emit = defineEmits<{ toggle: [] }>();
 const open = ref(false);
-const pinned = ref(false);
 const flash = ref(false);
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
 // The label flashes as each message crosses its wire.
@@ -38,21 +39,21 @@ const html = computed(() => {
 <template>
   <div
     class="wire-label"
-    :class="{ open: open || pinned || focused, flash, above, [align ?? 'center']: true, empty: view.last === undefined }"
+    :class="{ open: open || pinned, pinned, flash, above, [align ?? 'center']: true, empty: view.last === undefined }"
     :style="{ left: `${x}%`, top: `${y}%`, '--c': `var(--${color})` }"
     @mouseenter="open = true"
     @mouseleave="open = false"
-    @click="pinned = !pinned"
+    @click.stop="emit('toggle')"
   >
     <div class="tag">
-      <span class="name">{{ label }}</span>
+      <svg v-if="pinned" class="pin" viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 2.5l7 7-2.2.9-3.6 3.6.4 4.6-1.6 1.6-4.2-4.2L4 22l-2-2 6-6.3-4.2-4.2 1.6-1.6 4.6.4 3.6-3.6z" /></svg>
       <span class="kind">{{ kind }}</span>
     </div>
     <div v-if="view.what" class="what mono">{{ view.what }}</div>
-    <div v-if="(open || pinned || focused) && view.last !== undefined" class="pop">
+    <div v-if="(open || pinned) && view.last !== undefined" class="pop" @click.stop>
       <div class="pop-head">
-        <span>Last message · {{ label }}</span>
-        <span class="mono">{{ view.what }}</span>
+        <span>Last message · {{ label }} · <span class="mono">{{ view.what }}</span></span>
+        <span class="hint">{{ pinned ? 'pinned: click anywhere to close' : 'click the label to pin' }}</span>
       </div>
       <pre class="mono" v-html="html"></pre>
     </div>
@@ -68,7 +69,8 @@ const html = computed(() => {
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  cursor: help;
+  /* A pushpin: click to pin the popover open. */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28' viewBox='0 0 24 24'%3E%3Cpath fill='%23ffffff' stroke='%230a0e16' stroke-width='1.4' stroke-linejoin='round' d='M14.5 2.5l7 7-2.2.9-3.6 3.6.4 4.6-1.6 1.6-4.2-4.2L4 22l-2-2 6-6.3-4.2-4.2 1.6-1.6 4.6.4 3.6-3.6z'/%3E%3C/svg%3E") 3 25, pointer;
 }
 
 .tag {
@@ -98,17 +100,18 @@ const html = computed(() => {
   background: color-mix(in srgb, var(--c) 22%, var(--panel-2));
 }
 
-.name {
+.kind {
+  font-size: 13.5px;
   font-weight: 700;
   color: var(--c);
-  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
-.kind {
-  font-size: 12.5px;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
+.pin {
+  width: 14px;
+  height: 14px;
+  fill: var(--c);
 }
 
 .what {
@@ -126,7 +129,7 @@ const html = computed(() => {
 .pop {
   position: absolute;
   top: calc(100% + 10px);
-  width: 560px;
+  width: 840px;
   max-height: 46vh;
   display: flex;
   flex-direction: column;
@@ -169,6 +172,15 @@ const html = computed(() => {
 .pop-head .mono {
   color: var(--muted);
   font-weight: 400;
+}
+
+.pop-head .hint {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+.pop {
+  cursor: auto;
 }
 
 pre {

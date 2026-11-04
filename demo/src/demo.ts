@@ -73,8 +73,9 @@ export const STEPS = [
   { n: 2, title: 'X and Y subscribe', line: 'Each subscribes through SEP-3415, so A holds a subscription for each.' },
   { n: 3, title: 'X and Y catch up', line: 'Each catches up from the read’s moment. Nothing changed since, so nothing comes.' },
   { n: 4, title: 'Y closes ticket-3', line: 'Y’s copy is at the new revision, and Y stays caught up to where it was.' },
-  { n: 5, title: 'A sends the event', line: 'A POSTs the change to each subscription’s webhook, with none of the ticket’s contents.' },
-  { n: 6, title: 'X catches up', line: 'Y holds ticket-3 at that revision already, so it skips. X catches up, and gets a merge patch.' },
+  // A sends the event as Y's write commits, so this step follows step 4 by itself.
+  { n: 5, title: 'A sends the event', line: 'A POSTs the change to each subscription’s webhook as Y’s write commits, with none of the ticket’s contents.', auto: true },
+  { n: 6, title: 'X catches up', line: 'Y holds ticket-3 at that revision already, so it skips and stays caught up where it was. X catches up, with a merge patch.' },
 ] as const;
 
 const emptyClient = (): ClientView => ({ ready: false, copies: [], log: [], waiting: 0 });
@@ -99,8 +100,8 @@ export const state = reactive({
   Y: emptyClient(),
   wires: emptyWires(),
   pulses: [] as Pulse[],
-  /** The wire whose popover is open until the next step, as step 5 opens the event's. */
-  focus: undefined as WireName | undefined,
+  /** The wire whose popover is pinned open, as step 5 pins the event's, until a click anywhere. */
+  pinned: undefined as WireName | undefined,
 });
 
 function readToken(): string {
@@ -336,7 +337,7 @@ export function prepare(): Promise<void> {
     delete readFrom.Y;
     results.X.clear();
     results.Y.clear();
-    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), focus: undefined });
+    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), pinned: undefined });
     state.status = 'Wiping A and B…';
     for (const party of ['A', 'B'] as const) {
       const answer = await control(party, 'wipe');
@@ -371,7 +372,7 @@ export function step(n: number): Promise<void> {
   return run(async () => {
     if (n !== state.done + 1) throw new Error(`Step ${state.done + 1} comes next.`);
     const [x, y] = both();
-    state.focus = undefined;
+    state.pinned = undefined;
     if (n === 1) {
       // Each watch reads, then waits at its subscribe gate until step 2.
       watches.X = x.copies.watch(TEMPLATE);
@@ -408,10 +409,8 @@ export function step(n: number): Promise<void> {
       await until(() => x.held.length > 0 && y.held.length > 0);
       refresh('X');
       refresh('Y');
-      // The event went out as Y's write committed, so this step shows it: its path again, and
-      // the body A POSTed.
-      for (const [wire, from] of [['A-B', 'A'], ['B-X', 'B'], ['B-Y', 'B']] as const) pulse(wire, from);
-      state.focus = 'A-B';
+      // The event went out as Y's write committed, so this step shows the body A POSTed.
+      state.pinned = 'A-B';
     } else if (n === 6) {
       await y.release();
       refresh('Y');
@@ -422,6 +421,8 @@ export function step(n: number): Promise<void> {
     }
     state.done = n;
     state.status = n < 6 ? `Ready for step ${n + 1}.` : 'Done. Press Prepare to run it again.';
+    // Step 5 is what A does as step 4's write commits, so it follows by itself.
+    if (n === 4) setTimeout(() => void step(5), 1200);
   });
 }
 
