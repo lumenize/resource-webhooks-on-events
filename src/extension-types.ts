@@ -17,7 +17,7 @@ import type {
 
 /**
  * The extension's provisional identifier, a key in `capabilities.extensions`, which commits a
- * server to its two methods and to listing its event with webhook delivery (R20).
+ * server to its two methods and to listing its event (R20).
  */
 export const RESOURCE_EVENTS_EXTENSION = 'io.modelcontextprotocol/resource-events';
 
