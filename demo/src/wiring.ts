@@ -32,6 +32,8 @@ export interface ClientHooks {
   replied(exchange: Exchange): void;
   /** A message came down the client's socket from B. */
   socket(message: Record<string, unknown>): void;
+  /** The client's socket to B opened, or closed. */
+  connected(on: boolean): void;
   log(entry: LogEntry): void;
 }
 
@@ -72,6 +74,8 @@ export interface Watcher extends Party {
   held: CollectionEvent[];
   /** Reads each held event in turn, as it would have on arrival, and stops holding. */
   release(): Promise<void>;
+  /** Pings B and waits for the pong, so B counts the socket live, reconnecting first if it dropped. */
+  fresh(): Promise<void>;
   close(): void;
 }
 
@@ -162,33 +166,49 @@ function nextMessage(messages: Record<string, unknown>[], arrived: EventTarget, 
 }
 
 /**
+ * How often X and Y ping B. B counts a socket quiet for two of its heartbeats as asleep, and a
+ * browser slows the timers of a page out of sight, so the page pings well inside the heartbeat.
+ */
+const PING_MS = 10_000;
+
+/**
  * Signs X or Y in, opens its socket to B with a token for that socket, registers a new secret
- * on it, and builds its copies, whose subscribe and first catch-up wait for the page's gates.
+ * on it, and builds its copies, whose subscribe and first catch-up wait for the page's gates. A
+ * socket that drops is opened again with a new token and the same secret, after which the client
+ * catches up, as R12 asks on reconnecting to its gateway.
  */
 export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher> {
   const party = await signIn(name, hooks);
   const instance = `i_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const socketUrl = `${ORIGIN}/gateway/B/ws/${instance}`;
-  const token = await party.session.tokenForResource(ORIGIN, socketUrl);
-  const socket = new WebSocket(`${WS_ORIGIN}/gateway/B/ws/${instance}`, ['rw.1', `rw.token.${token}`]);
-  const messages: Record<string, unknown>[] = [];
-  const arrived = new EventTarget();
+  const secret = newSecret();
   const gates = { subscribe: new Gate(), catchUp: new Gate() };
   const held: CollectionEvent[] = [];
+  const pongs: (() => void)[] = [];
   let holding = false;
+  let closing = false;
+  let subscribed = false;
+  let hookUrl = '';
+  let socket: WebSocket | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let reconnecting: Promise<void> | undefined;
 
   const copies = new Copies({
     read: (named, cursor) => party.client.request<ReadCollectionResult>('resources/collection/read', { ...named, ...(cursor === undefined ? {} : { cursor }) }),
     subscribe: async (named: UriSpecification) => {
       await gates.subscribe.wait();
-      return party.client.request('events/subscribe', {
+      // A's challenge reaches B as soon as A has the subscribe, and B answers it only for a
+      // socket it counts live.
+      await fresh();
+      const result = await party.client.request('events/subscribe', {
         name: COLLECTION_UPDATED,
         arguments: named,
         delivery: { mode: 'webhook', url: hookUrl, secret },
         cursor: null,
         ttlMs: 3_600_000,
       });
+      subscribed = true;
+      return result;
     },
     catchUp: async (named, from) => {
       await gates.catchUp.wait();
@@ -198,40 +218,91 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     log: (entry) => hooks.log(entry),
   });
 
-  socket.addEventListener('message', (event) => {
-    // The runtime answers a ping with a bare pong, which is not JSON.
-    if (event.data === 'pong') return;
-    const message = JSON.parse(event.data as string) as Record<string, unknown>;
-    messages.push(message);
-    hooks.socket(redact(message.type === 'delivery' ? { ...message, body: JSON.parse(message.body as string) } : message) as Record<string, unknown>);
-    arrived.dispatchEvent(new CustomEvent('message', { detail: message }));
-    if (message.type !== 'delivery') return;
-    const body = JSON.parse(message.body as string) as Record<string, unknown>;
-    // SEP-3415's gap envelope says events may have been missed, which R12 answers with a catch-up.
-    if (body.type === 'gap') return void copies.trigger('gap');
-    const collectionEvent = body as unknown as CollectionEvent;
-    if (holding) held.push(collectionEvent);
-    else void copies.event(collectionEvent);
-  });
-  socket.addEventListener('close', () => clearInterval(heartbeat));
-  await new Promise<void>((resolve, reject) => {
-    socket.addEventListener('open', () => resolve(), { once: true });
-    socket.addEventListener('error', () => reject(new Error(`${name}'s socket to B did not open`)), { once: true });
-  });
+  // Opens a socket, registers the secret on it, and waits for B's acknowledgement and the hook.
+  async function connect(): Promise<void> {
+    const token = await party.session.tokenForResource(ORIGIN, socketUrl);
+    const next = new WebSocket(`${WS_ORIGIN}/gateway/B/ws/${instance}`, ['rw.1', `rw.token.${token}`]);
+    const messages: Record<string, unknown>[] = [];
+    const arrived = new EventTarget();
+    next.addEventListener('message', (event) => {
+      // The runtime answers a ping with a bare pong, which is not JSON.
+      if (event.data === 'pong') {
+        for (const resolve of pongs.splice(0)) resolve();
+        return;
+      }
+      const message = JSON.parse(event.data as string) as Record<string, unknown>;
+      messages.push(message);
+      hooks.socket(redact(message.type === 'delivery' ? { ...message, body: JSON.parse(message.body as string) } : message) as Record<string, unknown>);
+      arrived.dispatchEvent(new CustomEvent('message', { detail: message }));
+      if (message.type !== 'delivery') return;
+      const body = JSON.parse(message.body as string) as Record<string, unknown>;
+      // SEP-3415's gap envelope says events may have been missed, which R12 answers with a catch-up.
+      if (body.type === 'gap') return void copies.trigger('gap');
+      const collectionEvent = body as unknown as CollectionEvent;
+      if (holding) held.push(collectionEvent);
+      else void copies.event(collectionEvent);
+    });
+    next.addEventListener('close', (event) => {
+      if (socket !== next) return;
+      clearInterval(heartbeat);
+      hooks.connected(false);
+      hooks.socket({ type: 'closed', code: event.code });
+      if (!closing) setTimeout(() => void reconnect(), 1000);
+    });
+    await new Promise<void>((resolve, reject) => {
+      next.addEventListener('open', () => resolve(), { once: true });
+      next.addEventListener('error', () => reject(new Error(`${name}'s socket to B did not open`)), { once: true });
+    });
+    socket = next;
+    next.send(JSON.stringify({ secret }));
+    // A's challenge reaches B before the subscribe's answer, so the client subscribes only once B
+    // holds its secret.
+    const registered = await nextMessage(messages, arrived, ({ type }) => type === 'secret-registered' || type === 'secret-refused');
+    if (registered.type !== 'secret-registered') throw new Error(`B refused ${name}'s secret`);
+    hookUrl = (await nextMessage(messages, arrived, ({ type }) => type === 'hook')).hookUrl as string;
+    clearInterval(heartbeat);
+    const every = Math.min(PING_MS, Number(registered.heartbeatMs) || PING_MS);
+    heartbeat = setInterval(() => next.readyState === WebSocket.OPEN && next.send('ping'), every);
+    hooks.connected(true);
+  }
 
-  const secret = newSecret();
-  socket.send(JSON.stringify({ secret }));
-  // A's challenge reaches B before the subscribe's answer, so the client subscribes only once B
-  // holds its secret.
-  const registered = await nextMessage(messages, arrived, ({ type }) => type === 'secret-registered' || type === 'secret-refused');
-  if (registered.type !== 'secret-registered') throw new Error(`B refused ${name}'s secret`);
-  heartbeat = setInterval(() => socket.send('ping'), Number(registered.heartbeatMs) || 30_000);
-  const hookUrl = (await nextMessage(messages, arrived, ({ type }) => type === 'hook')).hookUrl as string;
+  function reconnect(): Promise<void> {
+    reconnecting ??= (async () => {
+      try {
+        await connect();
+        if (subscribed && gates.catchUp.isOpen) await copies.trigger('reconnected');
+      } catch {
+        if (!closing) setTimeout(() => void reconnect(), 3000);
+      } finally {
+        reconnecting = undefined;
+      }
+    })();
+    return reconnecting;
+  }
 
+  // Pings B and waits for the pong, so B counts the socket live when A's next POST to the hook
+  // arrives, opening the socket again first if it dropped.
+  async function fresh(): Promise<void> {
+    if (!socket || socket.readyState !== WebSocket.OPEN) await reconnect();
+    if (!socket || socket.readyState !== WebSocket.OPEN) throw new Error(`${name}'s socket to B is down`);
+    const pong = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`B did not answer ${name}'s ping`)), 5000);
+      pongs.push(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    socket.send('ping');
+    await pong;
+  }
+
+  await connect();
   return {
     ...party,
     copies,
-    hookUrl,
+    get hookUrl() {
+      return hookUrl;
+    },
     gates,
     held,
     hold: (on) => (holding = on),
@@ -239,9 +310,11 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
       holding = false;
       for (const event of held.splice(0)) await copies.event(event);
     },
+    fresh,
     close: () => {
+      closing = true;
       clearInterval(heartbeat);
-      if (socket.readyState === WebSocket.OPEN) socket.close(1000, 'Done');
+      if (socket?.readyState === WebSocket.OPEN) socket.close(1000, 'Done');
     },
   };
 }

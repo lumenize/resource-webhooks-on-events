@@ -242,6 +242,8 @@ const watches: Partial<Record<Client, Promise<void>>> = {};
 // The moment each client's read named as its nextFrom, which it is caught up to once it reads,
 // as the proposal's step 1 says, though Copies records it only once the subscribe returns.
 const readFrom: Partial<Record<Client, string>> = {};
+// Each client's last reply to each method, so a step can tell a failure from a success.
+const results: Record<Client, Map<string, Exchange>> = { X: new Map(), Y: new Map() };
 
 function refresh(client: Client): void {
   const party = parties[client];
@@ -267,6 +269,7 @@ function hooksFor(client: Client): ClientHooks {
       pulse(wire, 'A');
       onWire(wire, `${exchange.method} ←`, { request: { method: exchange.method, params: exchange.params }, reply: exchange.reply });
       if (exchange.method === 'resources/collection/read' && !exchange.failed) readFrom[client] = (exchange.reply as { nextFrom?: string }).nextFrom;
+      results[client].set(exchange.method, exchange);
       state[wire === 'X-A' ? 'X' : 'Y'].ready = true;
       queueMicrotask(() => refresh(client));
     },
@@ -280,6 +283,9 @@ function hooksFor(client: Client): ClientHooks {
       } else {
         onWire(down, String(message.type), message);
       }
+    },
+    connected(on: boolean) {
+      state[client].ready = on;
     },
     log(entry: LogEntry) {
       const view = state[client];
@@ -328,6 +334,8 @@ export function prepare(): Promise<void> {
     bodies.clear();
     delete readFrom.X;
     delete readFrom.Y;
+    results.X.clear();
+    results.Y.clear();
     Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), focus: undefined });
     state.status = 'Wiping A and B…';
     for (const party of ['A', 'B'] as const) {
@@ -366,31 +374,30 @@ export function step(n: number): Promise<void> {
     state.focus = undefined;
     if (n === 1) {
       // Each watch reads, then waits at its subscribe gate until step 2.
-      const read = (client: Client) =>
-        new Promise<void>((resolve) => {
-          const check = setInterval(() => {
-            if (state.wires[client === 'X' ? 'X-A' : 'Y-A'].what === 'resources/collection/read ←') {
-              clearInterval(check);
-              resolve();
-            }
-          }, 50);
-        });
       watches.X = x.copies.watch(TEMPLATE);
       watches.Y = y.copies.watch(TEMPLATE);
-      await Promise.all([read('X'), read('Y')]);
+      // A watch that fails ends here, so the step reports it rather than waiting on.
+      void watches.X.catch(() => undefined);
+      void watches.Y.catch(() => undefined);
+      await answered('resources/collection/read');
     } else if (n === 2) {
       x.gates.subscribe.open();
       y.gates.subscribe.open();
-      await until(() => ['X-A', 'Y-A'].every((wire) => state.wires[wire as WireName].what === 'events/subscribe ←'));
+      await answered('events/subscribe', () => Promise.race([watches.X, watches.Y]));
     } else if (n === 3) {
       x.gates.catchUp.open();
       y.gates.catchUp.open();
-      await Promise.all([watches.X, watches.Y]);
+      await Promise.all([watches.X, watches.Y]).catch((error: unknown) => {
+        throw new Error(`${error instanceof Error ? error.message : String(error)}. Press Prepare again.`);
+      });
     } else if (n === 4) {
       // Both hold the event the write sends, so step 5 shows it arrive and step 6 shows each
       // read it: Y skips it, since its write's reply gave it the revision, and X catches up.
       x.hold(true);
       y.hold(true);
+      // A POSTs the event to both hooks as the write commits, and B passes it only down a
+      // socket it counts live.
+      await Promise.all([x.fresh(), y.fresh()]);
       const copy = y.copies.copy(TICKET_3);
       if (!copy) throw new Error('Y holds no ticket-3.');
       const closed = json({ title: 'Printer jams', status: 'closed' });
@@ -416,6 +423,22 @@ export function step(n: number): Promise<void> {
     state.done = n;
     state.status = n < 6 ? `Ready for step ${n + 1}.` : 'Done. Press Prepare to run it again.';
   });
+}
+
+/**
+ * Waits until both clients have A's reply to `method`, and throws A's error if either reply is
+ * one. `failed` is a promise that rejects if the work under way fails before any reply comes.
+ */
+async function answered(method: string, failed?: () => Promise<unknown>): Promise<void> {
+  const waiting = until(() => results.X.has(method) && results.Y.has(method), 20_000);
+  await (failed ? Promise.race([waiting, failed().then(() => waiting)]) : waiting);
+  for (const client of ['X', 'Y'] as const) {
+    const exchange = results[client].get(method)!;
+    if (exchange.failed) {
+      const message = (exchange.reply as { message?: string } | undefined)?.message ?? String(exchange.reply);
+      throw new Error(`${client}'s ${method} failed: ${message}. Press Prepare again.`);
+    }
+  }
 }
 
 function until(condition: () => boolean, timeoutMs = 15_000): Promise<void> {

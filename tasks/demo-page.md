@@ -112,6 +112,8 @@ Where the build differs from the plan above:
 - **Step 1 shows each client caught up to its read's `nextFrom`,** as the proposal's table does. `Copies` records that moment only once the subscribe returns, so until then the page shows the read's `nextFrom`.
 - **Step 5 opens the webhook wire's popover on the event A POSTed,** since the event goes out as step 4's write commits, and the step would otherwise change nothing on screen.
 - **Each step has a one-line subtitle** under its heading, paraphrasing the proposal's text for that step.
+- **X's and Y's sockets ping every 10 seconds, and again just before a subscribe or a write, waiting for the pong.** B counts a socket quiet for two 30-second heartbeats as asleep and answers A's challenge for it with `503`, which A reports as `challenge_failed`. That was the first deployed run's failure on step 2, most likely because the browser slowed the page's 30-second pings. A socket that drops opens again with a new token and the same secret, and the client then catches up (R12).
+- **A failed step stops with A's message,** and asks for Prepare again, where the first version marked step 2 done on a failed subscribe and failed on step 3.
 
 Left open:
 
