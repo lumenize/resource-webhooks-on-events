@@ -99,6 +99,8 @@ export const state = reactive({
   Y: emptyClient(),
   wires: emptyWires(),
   pulses: [] as Pulse[],
+  /** The wire whose popover is open until the next step, as step 5 opens the event's. */
+  focus: undefined as WireName | undefined,
 });
 
 function readToken(): string {
@@ -195,7 +197,7 @@ function fromA(report: Record<string, unknown>): void {
     const client = clientOfHook(report.url as string | undefined);
     pulse('A-B', 'A');
     const what = report.kind === 'verification' ? `A checks ${client ? `${client}’s` : 'a'} hook` : `A POSTs an event for ${client ?? 'a client'}`;
-    onWire('A-B', what, { 'A reports': report, ...(report.webhookId ? { 'the event A POSTed': bodies.get(report.webhookId as string) ?? '(arriving)' } : {}) });
+    onWire('A-B', what, { ...(report.webhookId ? { 'the event A POSTed': bodies.get(report.webhookId as string) ?? '(arriving)' } : {}), 'A reports': report });
   }
 }
 
@@ -326,7 +328,7 @@ export function prepare(): Promise<void> {
     bodies.clear();
     delete readFrom.X;
     delete readFrom.Y;
-    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires() });
+    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), focus: undefined });
     state.status = 'Wiping A and B…';
     for (const party of ['A', 'B'] as const) {
       const answer = await control(party, 'wipe');
@@ -361,6 +363,7 @@ export function step(n: number): Promise<void> {
   return run(async () => {
     if (n !== state.done + 1) throw new Error(`Step ${state.done + 1} comes next.`);
     const [x, y] = both();
+    state.focus = undefined;
     if (n === 1) {
       // Each watch reads, then waits at its subscribe gate until step 2.
       const read = (client: Client) =>
@@ -398,6 +401,10 @@ export function step(n: number): Promise<void> {
       await until(() => x.held.length > 0 && y.held.length > 0);
       refresh('X');
       refresh('Y');
+      // The event went out as Y's write committed, so this step shows it: its path again, and
+      // the body A POSTed.
+      for (const [wire, from] of [['A-B', 'A'], ['B-X', 'B'], ['B-Y', 'B']] as const) pulse(wire, from);
+      state.focus = 'A-B';
     } else if (n === 6) {
       await y.release();
       refresh('Y');

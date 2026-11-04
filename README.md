@@ -42,6 +42,7 @@ One Cloudflare Worker hosts the server and the gateway, each a Durable Object:
 | A, the server | `/server/A`, in `src/server.ts` and `src/server-role/` | serves tickets and notes as MCP resources, with the strawman's four methods and zero-padded counters for moments; serves `resources/collection/read` and `resources/collection/catchup`; takes SEP-3415's `events/subscribe`, and delivers each event with retries held to SEP-3415's bounds; runs its own authorization server, in `src/auth/`, where clients register by Client ID Metadata Document |
 | B, the gateway | `/gateway/B`, in `src/gateway.ts` and `src/gateway-role/` | a gateway in SEP-3415's forward-proxy deployment: takes each client's webhooks, checks each signature, and passes the event down that client's WebSocket |
 | the client | `src/client/` | `mcp-client.ts` speaks MCP to A, and `copies.ts` keeps copies by the client's rules: it skips an event whose revisions it holds, catches up, applies patches, and starts over when told to |
+| the demo page | `demo/`, served by the Worker | shows A, B and two clients, X and Y, taking the proposal's simple happy path one step at a time, with the last message over each wire on hover; X and Y run `src/client/` in the page |
 
 The Worker's edge, in `src/edge.ts`, refuses requests from any origin but its own, checks A's tokens, and routes only the paths it lists.
 
@@ -87,6 +88,24 @@ npm run conformance
 
 ```bash
 npm run conformance:client
+```
+
+## The demo page
+
+The deployed demo is at [resource-webhooks-on-events.transformation.workers.dev](https://resource-webhooks-on-events.transformation.workers.dev/). Anyone can watch A and B there, and the page asks for the operator token before Prepare, which wipes A and B, signs X and Y in, and seeds tickets 3, 7 and 9. Each step's button then does what that step of § *A simple happy path* says, as `test/scenarios/events.ts` does.
+
+To run it locally, over https at `https://localhost:8443`, as the Worker serves it:
+
+```bash
+npm run demo:dev
+```
+
+It needs [mkcert](https://github.com/FiloSottile/mkcert), which makes a certificate for `localhost` from a CA kept in the gitignored `.certs/`, never installed in the system's trust store, so the browser warns once. The operator token is `OPERATOR_TOKEN` in `.demo-dev.vars`, which the first run makes. Vite rebuilds the page on each change.
+
+To deploy the demo under `wrangler.jsonc`'s own name, with secrets of its own in the gitignored `.demo.vars`:
+
+```bash
+npm run demo:deploy
 ```
 
 ## Deploying to Cloudflare

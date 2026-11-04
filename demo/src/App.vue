@@ -68,6 +68,7 @@ function dot(wire: WireName, from: PartyName) {
       <div class="brand">
         <h1>Resource Events</h1>
         <p>The proposal's simple happy path, live on Cloudflare Workers</p>
+        <a class="pr" href="https://github.com/modelcontextprotocol/experimental-ext-triggers-events/pull/19" target="_blank" rel="noopener">experimental-ext-triggers-events #19</a>
       </div>
       <div class="caption">
         <div class="now">{{ caption }}</div>
@@ -155,6 +156,7 @@ function dot(wire: WireName, from: PartyName) {
         :y="w.ly"
         :align="w.align"
         :above="w.ly >= 50"
+        :focused="state.focus === name"
         :view="state.wires[name]"
       />
     </main>
@@ -202,6 +204,18 @@ function dot(wire: WireName, from: PartyName) {
   margin: 2px 0 0;
   color: var(--muted);
   font-size: 15px;
+}
+
+.pr {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--faint);
+  text-decoration: none;
+}
+
+.pr:hover {
+  color: var(--muted);
 }
 
 .caption {

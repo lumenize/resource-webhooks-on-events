@@ -1,10 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { WireView } from '../demo.ts';
 
-const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; above?: boolean; align?: 'left' | 'right' | 'center' }>();
+// `focused` opens the label's popover until the page moves on, as step 5 does for the event.
+const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; above?: boolean; align?: 'left' | 'right' | 'center'; focused?: boolean }>();
 const open = ref(false);
 const pinned = ref(false);
+const flash = ref(false);
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+// The label flashes as each message crosses its wire.
+watch(
+  () => props.view.count,
+  () => {
+    flash.value = true;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => (flash.value = false), 900);
+  },
+);
 
 function escape(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -26,7 +38,7 @@ const html = computed(() => {
 <template>
   <div
     class="wire-label"
-    :class="{ open: open || pinned, above, [align ?? 'center']: true, empty: view.last === undefined }"
+    :class="{ open: open || pinned || focused, flash, above, [align ?? 'center']: true, empty: view.last === undefined }"
     :style="{ left: `${x}%`, top: `${y}%`, '--c': `var(--${color})` }"
     @mouseenter="open = true"
     @mouseleave="open = false"
@@ -37,7 +49,7 @@ const html = computed(() => {
       <span class="kind">{{ kind }}</span>
     </div>
     <div v-if="view.what" class="what mono">{{ view.what }}</div>
-    <div v-if="(open || pinned) && view.last !== undefined" class="pop">
+    <div v-if="(open || pinned || focused) && view.last !== undefined" class="pop">
       <div class="pop-head">
         <span>Last message · {{ label }}</span>
         <span class="mono">{{ view.what }}</span>
@@ -74,6 +86,11 @@ const html = computed(() => {
 
 .wire-label.open {
   z-index: 30;
+}
+
+.wire-label.flash .tag {
+  background: color-mix(in srgb, var(--c) 38%, var(--panel-2));
+  box-shadow: 0 0 0 4px var(--bg), 0 0 24px color-mix(in srgb, var(--c) 70%, transparent);
 }
 
 .wire-label.open .tag,

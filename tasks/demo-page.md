@@ -1,6 +1,6 @@
 # A demo page that runs the simple happy path live on the Worker
 
-**Status:** Pass 1, the design intent, for Larry's read before phases are written. It gates the short video Larry told #tasks-events-wg he hopes to post before the working group's meeting on Friday 2026-11-06, so the page must run on the deployed Worker by Thursday morning, for rehearsal.
+**Status:** Built on 2026-11-04 as a first version for Larry to try, deployed at [resource-webhooks-on-events.transformation.workers.dev](https://resource-webhooks-on-events.transformation.workers.dev/). The sections down to § *Open questions* are the plan it was built to, without phases, since Larry chose to iterate on the running page instead, and § *Build notes* says where the build differs. It gates the short video Larry told #tasks-events-wg he hopes to post before the working group's meeting on Friday 2026-11-06.
 
 ## Objective
 
@@ -100,3 +100,19 @@ Missing:
   - (a) For Friday, anyone may watch, and the buttons work only once the operator token is typed in, as Wipe already does.
   - (b) Anyone may step, each viewer with a server instance of their own, which needs the edge and the authorization server to take more than one instance.
   - Recommendation: (a), with (b) left for later, if the working group wants to try it.
+
+## Build notes
+
+Where the build differs from the plan above:
+
+- **X's and Y's wiring is the page's own,** in `demo/src/wiring.ts`, adapted from `gatedClient`. § *Current state* planned one module that the page and the tests share, which would have reworked the tests' wiring under deadline.
+- **Q1 took (a).** `npm run demo:deploy` deploys the demo as `resource-webhooks-on-events`, with secrets in the gitignored `.demo.vars`, and `npm run deployed` still deploys the test Worker.
+- **Q2 took (a) in effect.** Prepare needs the operator token, and a page that has not prepared has no X or Y to step, so a visitor can watch A and B but run nothing.
+- **Local dev runs over https,** since A refuses a client id or a webhook URL that is not https. `npm run demo:dev` serves the page at `https://localhost:8443` with a certificate from mkcert's local CA, and keeps its secrets in `.demo-dev.vars`, because wrangler would load a `.dev.vars` into the `lane-closed` tests too.
+- **Step 1 shows each client caught up to its read's `nextFrom`,** as the proposal's table does. `Copies` records that moment only once the subscribe returns, so until then the page shows the read's `nextFrom`.
+- **Step 5 opens the webhook wire's popover on the event A POSTed,** since the event goes out as step 4's write commits, and the step would otherwise change nothing on screen.
+- **Each step has a one-line subtitle** under its heading, paraphrasing the proposal's text for that step.
+
+Left open:
+
+- Nothing tests the page itself. The deployed tier's `eventsScenario` covers the protocol it drives, and a headless browser drove all six steps against the local Worker. The deployed page has not been driven yet, since its sign-in creates accounts on the production Worker, which is Larry's to do.
