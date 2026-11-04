@@ -21,10 +21,10 @@ if (!proposalPath) {
 
 const proposal = readFileSync(proposalPath, 'utf-8');
 // A rule or a question is a list item that opens with its number in bold, as `- **R12.**`, and a
-// decision is a table row that opens with its number, as `| D9 |`.
+// decision is a paragraph that does, as `**D19.**`.
 const defined = new Set([
   ...[...proposal.matchAll(/^- \*\*([RQ]\d+)\./gm)].map((match) => match[1]),
-  ...[...proposal.matchAll(/^\| (D\d+) \|/gm)].map((match) => match[1]),
+  ...[...proposal.matchAll(/^\*\*(D\d+)\./gm)].map((match) => match[1]),
 ]);
 const problems = [];
 const cited = new Set([...proposal.matchAll(/\b([RDQ]\d+)\b/g)].map((match) => match[1]));
