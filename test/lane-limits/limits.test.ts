@@ -1,5 +1,5 @@
 // The limits a collection read's page and a catch-up stop at, with SCAN_LIMIT at 3 and PAGE_BYTES
-// at 100 (R14, R22), on both layouts but where a test names one. PAGE_SIZE is wrangler.jsonc's,
+// at 100 (R14, R26), on both layouts but where a test names one. PAGE_SIZE is wrangler.jsonc's,
 // far above either.
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ import { catchUp, create, readAll, remove, timelines, update } from '../lane/res
 const ids = (count: number) => Array.from({ length: count }, (_, i) => `ticket-${i + 1}`);
 
 describe.each(LAYOUTS)('on the %s layout', (layout) => {
-  it('R22: stops a page after SCAN_LIMIT rows, and brings every ticket exactly once', async () => {
+  it('R26: stops a page after SCAN_LIMIT rows, and brings every ticket exactly once', async () => {
     expect(Number(env.SCAN_LIMIT)).toBe(3);
     const lane = newLane(layout);
     // Seven rows in path order, four of them tombstones, which a page scans and never carries,
@@ -23,7 +23,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(pages.flatMap(({ contents }) => contents.map(({ uri }) => uri.slice(lane.root.length + 9)))).toEqual(['ticket-1', 'ticket-4', 'ticket-7']);
   });
 
-  it('R22: stops a page once its contents pass PAGE_BYTES, and brings every ticket exactly once', async () => {
+  it('R26: stops a page once its contents pass PAGE_BYTES, and brings every ticket exactly once', async () => {
     expect(Number(env.PAGE_BYTES)).toBe(100);
     const lane = newLane(layout);
     // Each ticket is 70 bytes, so a page passes 100 bytes at its second.

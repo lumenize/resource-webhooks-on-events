@@ -1,10 +1,10 @@
-// A collection read a page at a time, with PAGE_SIZE at 1 (R22), on both layouts.
+// A collection read a page at a time, with PAGE_SIZE at 1 (R26), on both layouts.
 import { describe, expect, it } from 'vitest';
 import { LAYOUTS, newLane } from '../lane/lane';
 import { catchUpAll, create, readCollection, remove } from '../lane/resources';
 
 describe.each(LAYOUTS)('on the %s layout', (layout) => {
-  it('R22: brings each resource exactly once across pages that change between them, with one nextFrom to catch up from', async () => {
+  it('R26: brings each resource exactly once across pages that change between them, with one nextFrom to catch up from', async () => {
     const lane = newLane(layout);
     const three = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     await create(lane, 'tickets/ticket-7', { title: 'Again', status: 'open' });
@@ -28,7 +28,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     ]);
   });
 
-  it("R22: refuses a cursor that doesn't parse, or names a moment past the timeline's latest", async () => {
+  it("R26: refuses a cursor that doesn't parse, or names a moment past the timeline's latest", async () => {
     const lane = newLane(layout);
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     for (const cursor of ['nonsense', btoa(JSON.stringify({ nextFrom: '9'.repeat(12), after: '' }))]) {

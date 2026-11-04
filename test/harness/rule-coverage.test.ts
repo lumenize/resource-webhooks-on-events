@@ -1,5 +1,5 @@
 // The rule-coverage check `npm test` runs after the whole suite, given reports written by hand: it
-// passes only when every rule from R1 to R24 but R6 is named before the first colon of a passing
+// passes only when every rule from R1 to R26 but R6 and R25 is named before the first colon of a passing
 // test's title.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,16 +28,17 @@ function check(tests: { title: string; status: string }[]): { exitCode: number; 
 }
 
 const every = (except: number[] = []) =>
-  Array.from({ length: 24 }, (_, index) => index + 1)
-    .filter((rule) => rule !== 6 && !except.includes(rule))
+  Array.from({ length: 26 }, (_, index) => index + 1)
+    .filter((rule) => rule !== 6 && rule !== 25 && !except.includes(rule))
     .map((rule) => ({ title: `R${rule}: a test of it`, status: 'passed' }));
 
-it('passes when every rule but R6 is named by a passing test', () => {
+it('passes when every rule but R6 and R25 is named by a passing test', () => {
   expect(check(every())).toMatchObject({ exitCode: 0 });
 });
 
 it('fails naming a rule no passing test names, as R17 once left out', () => {
   expect(check(every([17]))).toEqual({ exitCode: 1, output: expect.stringContaining('No passing test names R17') });
+  expect(check(every([26]))).toEqual({ exitCode: 1, output: expect.stringContaining('No passing test names R26') });
 });
 
 it('counts neither a failing test, nor an R number after the colon, nor a title with none', () => {

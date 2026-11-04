@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Checks that every rule from R1 to R24 but R6 is named by a passing test. It reads the JSON
+// Checks that every rule from R1 to R26 but R6 and R25 is named by a passing test. It reads the JSON
 // vitest writes with `--reporter=json`, takes every R number before the first colon of each
 // passing test's title, as `R13, R14: brings ...`, and exits 1 naming each rule none names.
 import { readFileSync } from 'node:fs';
 
 const [file = 'results/test-results.json'] = process.argv.slice(2);
-// R6, several writers minting moments, is designed, not built.
-const REQUIRED = Array.from({ length: 24 }, (_, index) => index + 1).filter((rule) => rule !== 6);
+// R6, several writers minting moments, and R25, access that differs by principal, are designed, not built.
+const REQUIRED = Array.from({ length: 26 }, (_, index) => index + 1).filter((rule) => rule !== 6 && rule !== 25);
 
 const report = JSON.parse(readFileSync(file, 'utf8'));
 const named = new Set();
@@ -22,4 +22,4 @@ if (missing.length > 0) {
   console.error(`No passing test names ${missing.map((rule) => `R${rule}`).join(', ')} before the first colon of its title`);
   process.exit(1);
 }
-console.log(`Every rule from R1 to R24 but R6 is named by a passing test, in ${file}`);
+console.log(`Every rule from R1 to R26 but R6 and R25 is named by a passing test, in ${file}`);
