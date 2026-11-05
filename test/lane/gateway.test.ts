@@ -4,6 +4,7 @@
 // fraction of a second. A test that needs a timestamp in seconds to move, or a grant to run out,
 // moves the clock with vi.setSystemTime, which the Worker sees too, since its objects share the
 // test's globals.
+import { evictDurableObject } from 'cloudflare:test';
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 import { signToken } from '../../src/auth/signing';
@@ -234,6 +235,30 @@ describe("The page's controls", () => {
       expect(await page.control('wipe', {}, null)).toEqual({ type: 'refused', action: 'wipe' });
       expect(await page.control('nonsense')).toEqual({ type: 'unknown', action: 'nonsense' });
     }
+  });
+
+  it('tells each connected page when an event brings it back from hibernation, and not while it stays in memory', async () => {
+    // A gateway of its own, so no other test's work on B holds the eviction up.
+    const stub = env.GATEWAY.getByName('wakes');
+    const page = async () => {
+      const socket = (await stub.fetch('https://b.example/gateway/wakes/page', { headers: { Upgrade: 'websocket' } })).webSocket!;
+      socket.accept();
+      const kinds: string[] = [];
+      socket.addEventListener('message', (event) => {
+        kinds.push((JSON.parse(event.data as string) as { kind?: string }).kind ?? '');
+      });
+      return { socket, woke: () => kinds.filter((kind) => kind === 'woke').length };
+    };
+    const first = await page();
+    const second = await page();
+    await sleep(50);
+    expect([first.woke(), second.woke()]).toEqual([0, 0]);
+    // Evicting hibernates both sockets, and the next page's request runs the constructor again.
+    await evictDurableObject(stub);
+    const third = await page();
+    await vi.waitFor(() => expect([first.woke(), second.woke()]).toEqual([1, 1]));
+    expect(third.woke()).toBe(0);
+    for (const each of [first, second, third]) each.socket.close(1000, 'Done');
   });
 
   it("closes every client's socket on B's Wipe", async () => {

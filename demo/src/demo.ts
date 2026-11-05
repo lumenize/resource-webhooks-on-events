@@ -119,7 +119,8 @@ export const state = reactive({
   status: 'Input the operator token, then press Auth/Reset.',
   error: '',
   A: { connected: false, latest: '' as string, tickets: [] as Ticket[], subscriptions: [] as { client: string; template: string; expiresAt: string }[] },
-  B: { connected: false, sockets: [] as string[], lastStatus: {} as Record<string, string> },
+  /** B's clients, and when B last ran and last woke from hibernation, by the page's clock. */
+  B: { connected: false, sockets: [] as string[], lastStatus: {} as Record<string, string>, activeAt: undefined as number | undefined, wokeAt: undefined as number | undefined },
   X: emptyClient(),
   Y: emptyClient(),
   wires: emptyWires(),
@@ -220,6 +221,11 @@ function openChannel(party: 'A' | 'B'): void {
   });
   socket.addEventListener('message', (event) => {
     const message = JSON.parse(event.data as string) as Record<string, unknown>;
+    // B sends only while it runs, for an event, so each message says B just ran.
+    if (party === 'B') {
+      state.B.activeAt = Date.now();
+      if (message.kind === 'woke') state.B.wokeAt = Date.now();
+    }
     if (message.type === 'done' || message.type === 'refused' || message.type === 'unknown') {
       channels[party].waiting.shift()?.(message);
       return;

@@ -7,6 +7,7 @@ defineProps<{ name: string; role: string; color: string; area: string; online?: 
     <header>
       <span class="badge">{{ name }}</span>
       <span class="role">{{ role }}</span>
+      <slot name="status" />
       <span v-if="online !== undefined" class="online" :class="{ on: online }">{{ online ? 'live' : 'offline' }}</span>
     </header>
     <div class="body">

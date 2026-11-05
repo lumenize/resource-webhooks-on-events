@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import PartyBox from './components/PartyBox.vue';
+import SleepStatus from './components/SleepStatus.vue';
 import TicketTable from './components/TicketTable.vue';
 import WireLabel from './components/WireLabel.vue';
 import { chooseScene, currentScene, prepare, saveToken, SCENE_MENU, short, state, step, type PartyName, type WireName } from './demo.ts';
@@ -157,6 +158,7 @@ function dot(wire: WireName, from: PartyName) {
       </PartyBox>
 
       <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected">
+        <template #status><SleepStatus :active-at="state.B.activeAt" :woke-at="state.B.wokeAt" /></template>
         <p class="note">Takes each client's webhooks, checks each signature, and passes the event down that client's socket.</p>
         <div class="pair">
           <div v-for="client in CLIENTS" :key="client" class="half">

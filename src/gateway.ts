@@ -48,6 +48,9 @@ export class Gateway extends DurableObject<Env> {
       forward: (client, message) => this.#forward(client, message),
       report: (body) => report(this.ctx, 'B', body),
     });
+    // The runtime runs the constructor again when an event brings B back from hibernation, so a
+    // page still connected hears that B was out of memory. A page connecting now is not yet one.
+    report(ctx, 'B', { kind: 'woke' });
   }
 
   async fetch(request: Request): Promise<Response> {
