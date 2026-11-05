@@ -829,9 +829,10 @@ const RESTORE: Scene = {
   ],
 };
 
-export const SCENES: Scene[] = [HAPPY, AHEAD, CROSS, MISSED, RESTORE];
+// Missed events comes second, since a laptop asleep overnight is the case most viewers meet first.
+export const SCENES: Scene[] = [HAPPY, MISSED, AHEAD, CROSS, RESTORE];
 
-/** The scene menu: the happy path, then the less common cases in the proposal's order. */
+/** The scene menu: the happy path, then the less common cases. */
 export const SCENE_MENU: { id: string; title: string }[] = SCENES.map(({ id, title }) => ({ id, title }));
 
 openChannel('A');

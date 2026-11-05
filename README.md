@@ -92,7 +92,7 @@ npm run conformance:client
 
 ## The demo page
 
-The deployed demo is at [resource-webhooks-on-events.transformation.workers.dev](https://resource-webhooks-on-events.transformation.workers.dev/). Anyone can watch A and B there, and the page asks for the operator token before Auth/Reset, which wipes A and B, signs X and Y in, and seeds tickets 3, 7 and 9. Its menu picks a scene: the proposal's § *A simple happy path*, whose steps do what `test/scenarios/events.ts` does, or one of its § *Less common cases*: a writer's copy that runs ahead of its catch-ups, messages that cross, missed events, and starting over after A is restored.
+The deployed demo is at [resource-webhooks-on-events.transformation.workers.dev](https://resource-webhooks-on-events.transformation.workers.dev/). Anyone can watch A and B there, and the page asks for the operator token before Auth/Reset, which wipes A and B, signs X and Y in, and seeds tickets 3, 7 and 9. Its menu picks a scene: the proposal's § *A simple happy path*, whose steps do what `test/scenarios/events.ts` does, or one of its § *Less common cases*: missed events, a writer's copy that runs ahead of its catch-ups, messages that cross, and starting over after A is restored.
 
 To run it locally, over https at `https://localhost:8443`, as the Worker serves it:
 
