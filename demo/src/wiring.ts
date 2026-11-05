@@ -30,6 +30,8 @@ export interface ClientHooks {
   sent(exchange: Exchange): void;
   /** A's reply to that request is in. */
   replied(exchange: Exchange): void;
+  /** A message went up the client's socket to B, redacted. */
+  socketSent(message: Record<string, unknown>): void;
   /** A message came down the client's socket from B. */
   socket(message: Record<string, unknown>): void;
   /** The client's socket to B opened, or closed. */
@@ -271,6 +273,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     });
     socket = next;
     next.send(JSON.stringify({ secret }));
+    hooks.socketSent(redact({ secret }) as Record<string, unknown>);
     // A's challenge reaches B before the subscribe's answer, so the client subscribes only once B
     // holds its secret.
     const registered = await nextMessage(messages, arrived, ({ type }) => type === 'secret-registered' || type === 'secret-refused');

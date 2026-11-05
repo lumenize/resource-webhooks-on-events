@@ -108,7 +108,7 @@ export const state = reactive({
   /** The last step done: 0 once prepared, -1 before. */
   done: -1,
   busy: false,
-  status: 'Type the operator token, then press Auth/Reset.',
+  status: 'Input the operator token, then press Auth/Reset.',
   error: '',
   A: { connected: false, latest: '' as string, tickets: [] as Ticket[], subscriptions: [] as { client: string; template: string; expiresAt: string }[] },
   B: { connected: false, sockets: [] as string[], lastStatus: {} as Record<string, string> },
@@ -280,6 +280,9 @@ function refresh(client: Client): void {
   view.waiting = party.held.length;
 }
 
+// The last message each client sent up its socket, so B's answer can show beside it.
+const sentUp: Partial<Record<Client, Record<string, unknown>>> = {};
+
 function hooksFor(client: Client): ClientHooks {
   const wire: WireName = client === 'X' ? 'X-A' : 'Y-A';
   const down: WireName = client === 'X' ? 'B-X' : 'B-Y';
@@ -303,9 +306,18 @@ function hooksFor(client: Client): ClientHooks {
         const body = message.body as { eventId?: string } | undefined;
         onWire(down, `event ${short(body?.eventId)}`, message);
         queueMicrotask(() => refresh(client));
+      } else if (message.type === 'secret-registered' || message.type === 'secret-refused') {
+        // B's answer to the secret the client sent up the socket, shown with it, as MCP's are.
+        pulse(down, 'B');
+        onWire(down, 'secret ←', { request: sentUp[client], reply: message });
       } else {
         onWire(down, String(message.type), message);
       }
+    },
+    socketSent(message) {
+      pulse(down, client);
+      sentUp[client] = message;
+      onWire(down, 'secret →', { request: message });
     },
     connected(on: boolean) {
       state[client].ready = on;
@@ -354,7 +366,7 @@ async function write(party: Party, method: 'resources/create' | 'resources/updat
  */
 export function prepare(): Promise<void> {
   return run(async () => {
-    if (!state.operatorToken) throw new Error('Type the operator token first.');
+    if (!state.operatorToken) throw new Error('Input the operator token first.');
     parties.X?.close();
     parties.Y?.close();
     delete parties.X;

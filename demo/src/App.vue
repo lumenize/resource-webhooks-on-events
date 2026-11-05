@@ -29,8 +29,8 @@ const WIRES: Record<WireName, Wire> = {
   'A-B': { from: 'A', to: 'B', x0: 41, y0: 20, x1: 59, y1: 20, color: 'A', label: 'A → B', kind: 'webhook', lx: 50, ly: 20, arrows: 'to' },
   'X-A': { from: 'X', to: 'A', x0: 14, y0: 60, x1: 14, y1: 40, color: 'X', label: 'X ⇄ A', kind: 'MCP', lx: 14, ly: 50, align: 'left', arrows: 'both' },
   'Y-A': { from: 'Y', to: 'A', x0: 66, y0: 60, x1: 34, y1: 40, color: 'Y', label: 'Y ⇄ A', kind: 'MCP', lx: 58, ly: 55, arrows: 'both' },
-  'B-X': { from: 'B', to: 'X', x0: 66, y0: 40, x1: 34, y1: 60, color: 'B', label: 'B → X', kind: 'WebSocket', lx: 42, ly: 55, arrows: 'to' },
-  'B-Y': { from: 'B', to: 'Y', x0: 86, y0: 40, x1: 86, y1: 60, color: 'B', label: 'B → Y', kind: 'WebSocket', lx: 86, ly: 50, align: 'right', arrows: 'to' },
+  'B-X': { from: 'B', to: 'X', x0: 66, y0: 40, x1: 34, y1: 60, color: 'B', label: 'B ⇄ X', kind: 'WebSocket', lx: 42, ly: 55, arrows: 'both' },
+  'B-Y': { from: 'B', to: 'Y', x0: 86, y0: 40, x1: 86, y1: 60, color: 'B', label: 'B ⇄ Y', kind: 'WebSocket', lx: 86, ly: 50, align: 'right', arrows: 'both' },
 };
 const COLORS = ['A', 'B', 'X', 'Y'] as const;
 

@@ -3,7 +3,7 @@ defineProps<{ name: string; role: string; color: string; area: string; online?: 
 </script>
 
 <template>
-  <section class="box" :style="{ '--c': `var(--${color})`, gridArea: area }">
+  <section class="box" :class="{ offline: online === false }" :style="{ '--c': `var(--${color})`, gridArea: area }">
     <header>
       <span class="badge">{{ name }}</span>
       <span class="role">{{ role }}</span>
@@ -28,6 +28,13 @@ defineProps<{ name: string; role: string; color: string; area: string; online?: 
   border-radius: 14px;
   box-shadow: 0 0 0 1px #0004, 0 18px 40px -24px color-mix(in srgb, var(--c) 45%, transparent);
   overflow: hidden;
+  transition: filter 0.4s, opacity 0.4s;
+}
+
+/* A party that is offline greys out whole. */
+.box.offline {
+  filter: grayscale(1);
+  opacity: 0.45;
 }
 
 header {
