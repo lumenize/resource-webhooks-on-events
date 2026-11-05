@@ -30,7 +30,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
 
     // The two patches apply in order, from the copy at `from`.
     let copy: JsonValue = { title: 'Printer jams', status: 'open' };
-    for (const result of [one, three]) copy = applyMergePatch(copy, result.changes[0].patch as JsonValue);
+    for (const result of [one, three]) copy = applyMergePatch(copy, JSON.parse((result.changes[0].patch as { text: string }).text) as JsonValue);
     expect(copy).toEqual(JSON.parse((await read(lane, 'tickets/ticket-5')).text));
   });
 

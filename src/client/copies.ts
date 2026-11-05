@@ -278,8 +278,9 @@ export class Copies {
   // the resource, and a read that fails, or brings a revision earlier than the change's, leaves
   // the change unapplied (R19).
   async #patch(change: CollectionChange, copy: Copy | undefined): Promise<boolean> {
-    if (copy && !copy.deleted && copy.revision === change.previousRevision && copy.contents && 'text' in copy.contents) {
-      const text = JSON.stringify(applyMergePatch(JSON.parse(copy.contents.text) as JsonValue, change.patch as JsonValue));
+    const patch = change.patch;
+    if (copy && !copy.deleted && copy.revision === change.previousRevision && copy.contents && 'text' in copy.contents && patch && 'text' in patch) {
+      const text = JSON.stringify(applyMergePatch(JSON.parse(copy.contents.text) as JsonValue, JSON.parse(patch.text) as JsonValue));
       const _meta = { ...copy.contents._meta, [RESOURCE_REVISION_META_KEY]: change.revision };
       this.#set(change.uri, { revision: change.revision, deleted: false, contents: { ...copy.contents, text, _meta } });
       return true;

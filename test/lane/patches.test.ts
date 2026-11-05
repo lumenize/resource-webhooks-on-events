@@ -8,6 +8,9 @@ import { LAYOUTS, newLane } from './lane';
 import { catchUp, create, read, remove, timelines, update } from './resources';
 
 const MERGE = { patchMimeTypes: ['application/merge-patch+json'] };
+// A merge patch, as a catch-up carries it: shaped as a write's contents (R19).
+const mergePatch = (patch: JsonValue) => ({ mimeType: 'application/merge-patch+json', text: JSON.stringify(patch) });
+const patchOf = (entry: CollectionChange) => JSON.parse((entry.patch as { text: string }).text) as JsonValue;
 const TICKETS = (layout: string) => (layout === 'split' ? 'tickets' : 'work');
 
 afterEach(() => {
@@ -29,11 +32,10 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       effect: 'updated',
       previousRevision: opened.revision,
       revision: closed.revision,
-      patchMimeType: 'application/merge-patch+json',
-      patch: { status: 'closed' },
+      patch: mergePatch({ status: 'closed' }),
     });
     const atFrom: JsonValue = { title: 'Printer jams', status: 'open' };
-    expect(applyMergePatch(atFrom, entry.patch as JsonValue)).toEqual(JSON.parse((await read(lane, 'tickets/ticket-3')).text));
+    expect(applyMergePatch(atFrom, patchOf(entry))).toEqual(JSON.parse((await read(lane, 'tickets/ticket-3')).text));
   });
 
   it('R19: brings each effect from from to nextFrom, whatever the writes between', async () => {
@@ -53,7 +55,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       revision: created.revision,
       contents: { uri: `${lane.root}/tickets/ticket-1`, mimeType: 'application/json', text: JSON.stringify({ title: 'New', status: 'open' }) },
     });
-    expect(byUri.get('tickets/ticket-4')).toMatchObject({ effect: 'updated', previousRevision: again.revision, revision: recreated.revision, patch: { status: 'closed' } });
+    expect(byUri.get('tickets/ticket-4')).toMatchObject({ effect: 'updated', previousRevision: again.revision, revision: recreated.revision, patch: mergePatch({ status: 'closed' }) });
     expect(byUri.get('tickets/ticket-2')).toEqual({ uri: `${lane.root}/tickets/ticket-2`, effect: 'deleted', revision: gone.revision } satisfies CollectionChange);
   });
 
@@ -84,8 +86,8 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     await update(lane, 'tickets/ticket-4', { title: 'b', status: 'closed' }, opened.revision);
     await update(lane, 'tickets/ticket-5', '{ "title": "Printer jams", "status": "open" }', spaced.revision);
     const byUri = new Map((await catchUp(lane, 'tickets/{id}', from, MERGE)).changes.map((entry) => [entry.uri.slice(lane.root.length + 1), entry]));
-    expect(byUri.get('tickets/ticket-4')).toMatchObject({ patch: { title: 'b', status: 'closed' } });
-    expect(byUri.get('tickets/ticket-5')).toMatchObject({ patchMimeType: 'application/merge-patch+json', patch: {} });
+    expect(byUri.get('tickets/ticket-4')).toMatchObject({ patch: mergePatch({ title: 'b', status: 'closed' }) });
+    expect(byUri.get('tickets/ticket-5')).toMatchObject({ patch: mergePatch({}) });
   });
 
   it('R19, R21: brings ticket-5 as contents once its revision at from has lost its contents to the prune', async () => {

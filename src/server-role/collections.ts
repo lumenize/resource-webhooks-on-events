@@ -194,7 +194,7 @@ export class Collections {
       // A change only to whitespace is the empty patch, since a merge patch patches parsed text.
       const patch = change.kind === 'same' ? {} : change.kind === 'patch' ? change.patch : undefined;
       if (patch !== undefined && utf8Length(text) >= utf8Length(JSON.stringify(patch))) {
-        return { ...entry, patchMimeType: MERGE_PATCH_MIME_TYPE, patch };
+        return { ...entry, patch: { mimeType: MERGE_PATCH_MIME_TYPE, text: JSON.stringify(patch) } };
       }
     }
     return { ...entry, contents: { uri, mimeType: 'application/json', text } };

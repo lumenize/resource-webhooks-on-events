@@ -26,8 +26,8 @@ Y made the change, so it already holds ticket-3 at `"108"`, and skips the event.
 {"changes": [
   {"uri": "tickets/ticket-3", "effect": "updated",
    "previousRevision": "101", "revision": "108",
-   "patchMimeType": "application/merge-patch+json",
-   "patch": {"status": "closed"}}],
+   "patch": {"mimeType": "application/merge-patch+json",
+             "text": "{\"status\":\"closed\"}"}}],
  "hasMore": false, "nextFrom": "108", "nextPollMs": 30000}
 ```
 

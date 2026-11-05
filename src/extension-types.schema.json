@@ -251,11 +251,15 @@
                     "$ref": "#/$defs/ChangeEffect"
                 },
                 "patch": {
-                    "description": "The patch, as JSON for a JSON-based format and as a string otherwise."
-                },
-                "patchMimeType": {
-                    "description": "The patch's format, one of the catch-up's `patchMimeTypes`.",
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "$ref": "#/$defs/Omit<TextResourceContents,\"uri\">"
+                        },
+                        {
+                            "$ref": "#/$defs/Omit<BlobResourceContents,\"uri\">"
+                        }
+                    ],
+                    "description": "The patch, shaped as a write's contents, whose `mimeType` is the patch's format, one of the\ncatch-up's `patchMimeTypes`."
                 },
                 "previousRevision": {
                     "description": "The resource's revision before the change, absent for a creation.",

@@ -164,10 +164,11 @@ export const MERGE_PATCH_MIME_TYPE = 'application/merge-patch+json';
 export interface CollectionChange extends ChangeSetEntry {
   /** The resource as it stood at `nextFrom`. */
   contents?: TextResourceContents | BlobResourceContents;
-  /** The patch's format, one of the catch-up's `patchMimeTypes`. */
-  patchMimeType?: string;
-  /** The patch, as JSON for a JSON-based format and as a string otherwise. */
-  patch?: unknown;
+  /**
+   * The patch, shaped as a write's contents, whose `mimeType` is the patch's format, one of the
+   * catch-up's `patchMimeTypes`.
+   */
+  patch?: WriteContents;
 }
 
 export interface CatchUpCollectionResult extends Result {
