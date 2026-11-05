@@ -261,6 +261,29 @@ describe("The page's controls", () => {
     for (const each of [first, second, third]) each.socket.close(1000, 'Done');
   });
 
+  it('has A tell each connected page when an event brings it back from hibernation, as B does', async () => {
+    // A server of its own, so no other test's work on A holds the eviction up.
+    const stub = env.SERVER.getByName('wakes');
+    const page = async () => {
+      const socket = (await stub.fetch('https://a.example/server/wakes/page', { headers: { Upgrade: 'websocket' } })).webSocket!;
+      socket.accept();
+      const kinds: string[] = [];
+      socket.addEventListener('message', (event) => {
+        kinds.push((JSON.parse(event.data as string) as { kind?: string }).kind ?? '');
+      });
+      return { socket, woke: () => kinds.filter((kind) => kind === 'woke').length };
+    };
+    const first = await page();
+    const second = await page();
+    await sleep(50);
+    expect([first.woke(), second.woke()]).toEqual([0, 0]);
+    await evictDurableObject(stub);
+    const third = await page();
+    await vi.waitFor(() => expect([first.woke(), second.woke()]).toEqual([1, 1]));
+    expect(third.woke()).toBe(0);
+    for (const each of [first, second, third]) each.socket.close(1000, 'Done');
+  });
+
   it("closes every client's socket on B's Wipe", async () => {
     const lane = newLane();
     const page = await watch(lane, 'B');

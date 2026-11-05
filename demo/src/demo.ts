@@ -118,7 +118,16 @@ export const state = reactive({
   busy: false,
   status: 'Input the operator token, then press Auth/Reset.',
   error: '',
-  A: { connected: false, latest: '' as string, tickets: [] as Ticket[], subscriptions: [] as { client: string; template: string; expiresAt: string }[] },
+  /** What A holds, how many deliveries it holds in memory, and when it last ran and last woke. */
+  A: {
+    connected: false,
+    latest: '' as string,
+    tickets: [] as Ticket[],
+    subscriptions: [] as { client: string; template: string; expiresAt: string }[],
+    pending: 0,
+    activeAt: undefined as number | undefined,
+    wokeAt: undefined as number | undefined,
+  },
   /** B's clients, and when B last ran and last woke from hibernation, by the page's clock. */
   B: { connected: false, sockets: [] as string[], lastStatus: {} as Record<string, string>, activeAt: undefined as number | undefined, wokeAt: undefined as number | undefined },
   X: emptyClient(),
@@ -221,11 +230,10 @@ function openChannel(party: 'A' | 'B'): void {
   });
   socket.addEventListener('message', (event) => {
     const message = JSON.parse(event.data as string) as Record<string, unknown>;
-    // B sends only while it runs, for an event, so each message says B just ran.
-    if (party === 'B') {
-      state.B.activeAt = Date.now();
-      if (message.kind === 'woke') state.B.wokeAt = Date.now();
-    }
+    // A and B send only while they run, for an event, so each message says that party just ran.
+    state[party].activeAt = Date.now();
+    if (message.kind === 'woke') state[party].wokeAt = Date.now();
+    if (party === 'A' && message.kind === 'pending') state.A.pending = message.deliveries as number;
     if (message.type === 'done' || message.type === 'refused' || message.type === 'unknown') {
       channels[party].waiting.shift()?.(message);
       return;

@@ -64,8 +64,17 @@ function toggle(name: WireName): void {
 }
 
 const CLIENTS = ['X', 'Y'] as const;
-// Whether B runs, idles or hibernates, which its corner shows and its box dims for.
-const { phase: sleepPhase, seconds: sleepSeconds } = useSleep(() => state.B.activeAt, () => state.B.wokeAt);
+// Whether A and B run, idle or hibernate, which each one's corner shows and its box dims for. A
+// stays awake while it holds a delivery waiting to retry.
+const { phase: phaseA, seconds: secondsA } = useSleep(() => state.A.activeAt, () => state.A.wokeAt, () => state.A.pending > 0);
+const { phase: phaseB, seconds: secondsB } = useSleep(() => state.B.activeAt, () => state.B.wokeAt);
+
+// A socket B holds open, which stays drawn while B hibernates. MCP and webhook wires carry a
+// request only while one is under way.
+function held(name: WireName): boolean {
+  const w = WIRES[name];
+  return w.kind === 'WebSocket' && state.B.sockets.includes(w.to);
+}
 const token = ref(state.operatorToken);
 function onToken(): void {
   saveToken(token.value);
@@ -136,14 +145,15 @@ function dot(wire: WireName, from: PartyName) {
           :key="name"
           v-bind="px(w)"
           :style="{ stroke: `var(--${w.color})`, color: `var(--${w.color})` }"
-          :class="{ lit: lit.has(name) }"
+          :class="{ lit: lit.has(name), held: held(name) }"
           :marker-end="`url(#arrow-${w.color})`"
           :marker-start="w.arrows === 'both' ? `url(#arrow-${w.color})` : undefined"
         />
       </svg>
       <div v-for="p in state.pulses" :key="p.id" class="dot" :style="dot(p.wire, p.from)"></div>
 
-      <PartyBox name="A" role="the server" color="A" area="1 / 1" :online="state.A.connected">
+      <PartyBox name="A" role="the server" color="A" area="1 / 1" :online="state.A.connected" :asleep="phaseA === 'hibernating'">
+        <template #status><SleepStatus :phase="phaseA" :seconds="secondsA" /></template>
         <div class="kpi">
           <span class="label">latest moment</span>
           <span class="value mono">{{ short(state.A.latest) }}</span>
@@ -160,8 +170,8 @@ function dot(wire: WireName, from: PartyName) {
         </ul>
       </PartyBox>
 
-      <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected" :asleep="sleepPhase === 'hibernating'">
-        <template #status><SleepStatus :phase="sleepPhase" :seconds="sleepSeconds" /></template>
+      <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected" :asleep="phaseB === 'hibernating'">
+        <template #status><SleepStatus :phase="phaseB" :seconds="secondsB" /></template>
         <p class="note">Takes each client's webhooks, checks each signature, and passes the event down that client's socket.</p>
         <div class="pair">
           <div v-for="client in CLIENTS" :key="client" class="half">
@@ -364,9 +374,15 @@ function dot(wire: WireName, from: PartyName) {
 
 .wires line {
   stroke-width: 2.5;
-  opacity: 0.45;
+  opacity: 0.2;
   stroke-dasharray: 6 6;
-  transition: opacity 200ms;
+  transition: opacity 300ms;
+}
+
+/* A socket B holds open stays drawn, solid, even while B hibernates and costs nothing. */
+.wires line.held {
+  opacity: 0.8;
+  stroke-dasharray: none;
 }
 
 .wires line.lit {

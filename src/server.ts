@@ -95,6 +95,9 @@ export class Server extends DurableObject<Env> {
       clientDocument: (url) => this.#clientDocument(url),
       accountCap: Number(env.ACCOUNT_CAP),
     });
+    // The runtime runs the constructor again when an event brings A back from hibernation, so a
+    // page still connected hears that A was out of memory. A page connecting now is not yet one.
+    report(ctx, 'A', { kind: 'woke' });
   }
 
   /**

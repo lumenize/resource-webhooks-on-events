@@ -1,7 +1,8 @@
-// Whether B is running, idle in memory, or hibernated. B runs only for an event, and every event
-// B handles reports to the page, so `activeAt` is when B last ran. Cloudflare hibernates an idle
-// Durable Object after 10 seconds, and bills it no duration while idle or hibernated. `wokeAt`
-// is when B's constructor last ran again, which proves it had been out of memory.
+// Whether A or B is running, idle in memory, or hibernated. Each runs only for an event, and every
+// event it handles reports to the page, so `activeAt` is when it last ran. Cloudflare hibernates
+// an idle Durable Object after 10 seconds, and bills it no duration while idle or hibernated.
+// `wokeAt` is when its constructor last ran again, which proves it had been out of memory. A
+// delivery waiting to retry holds A in memory under a waitUntil, which `holding` says.
 import { computed, onBeforeUnmount, ref } from 'vue';
 
 /** How long Cloudflare keeps an idle Durable Object in memory before it hibernates it. */
@@ -11,10 +12,10 @@ const AWAKE_MS = 700;
 /** How long the page shows that B woke. */
 const WOKE_MS = 1800;
 
-export type SleepPhase = 'unknown' | 'woke' | 'awake' | 'idle' | 'hibernating';
+export type SleepPhase = 'unknown' | 'woke' | 'awake' | 'holding' | 'idle' | 'hibernating';
 
-/** B's phase, and the whole seconds left before it hibernates, kept current every 100 ms. */
-export function useSleep(activeAt: () => number | undefined, wokeAt: () => number | undefined) {
+/** The party's phase, and the whole seconds left before it hibernates, kept current every 100 ms. */
+export function useSleep(activeAt: () => number | undefined, wokeAt: () => number | undefined, holding: () => boolean = () => false) {
   const now = ref(Date.now());
   const ticker = setInterval(() => (now.value = Date.now()), 100);
   onBeforeUnmount(() => clearInterval(ticker));
@@ -23,6 +24,7 @@ export function useSleep(activeAt: () => number | undefined, wokeAt: () => numbe
     if (active === undefined) return 'unknown';
     const woke = wokeAt();
     if (woke !== undefined && now.value - woke < WOKE_MS) return 'woke';
+    if (holding()) return 'holding';
     const idle = now.value - active;
     if (idle < AWAKE_MS) return 'awake';
     return idle < HIBERNATES_AFTER_MS ? 'idle' : 'hibernating';

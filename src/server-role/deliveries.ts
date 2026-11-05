@@ -48,7 +48,12 @@ export type DeliveryReport =
       errorCode?: number;
       failure?: string;
     }
-  | { kind: 'attempt'; url: string; webhookId: string; attempt: number; outcome: string };
+  | { kind: 'attempt'; url: string; webhookId: string; attempt: number; outcome: string }
+  /**
+   * How many deliveries A holds, sent or waiting to retry, each under a waitUntil that keeps A in
+   * memory, reported as the count changes.
+   */
+  | { kind: 'pending'; deliveries: number };
 
 export interface DeliveriesOptions {
   send: Send;
@@ -194,6 +199,7 @@ export class Deliveries {
       state.wake?.();
       if (!state.posting) this.#slots.delete(slot);
     }
+    this.#reportPending();
   }
 
   /** Forgets every verification and abandons every delivery, as a Wipe does. */
@@ -206,6 +212,7 @@ export class Deliveries {
     this.#slots.clear();
     this.#verified.clear();
     this.#buckets.clear();
+    this.#reportPending();
   }
 
   // Each message runs under its own waitUntil, which holds the object up to 15 minutes from the
@@ -213,7 +220,12 @@ export class Deliveries {
   #start(slot: string, message: Message): void {
     const state: Slot = { subscriptionId: message.subscriptionId, current: message, cancelled: false, posting: false };
     this.#slots.set(slot, state);
+    this.#reportPending();
     this.#options.waitUntil(this.#deliver(slot, state, message));
+  }
+
+  #reportPending(): void {
+    this.#options.report?.({ kind: 'pending', deliveries: this.#slots.size });
   }
 
   async #deliver(slot: string, state: Slot, message: Message): Promise<void> {
@@ -241,6 +253,7 @@ export class Deliveries {
     const next = state.pending;
     this.#slots.delete(slot);
     if (next) this.#start(slot, next);
+    else this.#reportPending();
   }
 
   #wait(state: Slot, ms: number): Promise<void> {

@@ -188,6 +188,23 @@ describe("A's handshake", () => {
     expect(page.raw.join('\n')).not.toContain(endpoint.received[1].headers.get('webhook-signature')!.slice(3));
   });
 
+  it('reports how many deliveries it holds, one from the first attempt through its retry, and none once it lands', async () => {
+    const lane = newLane();
+    const page = await watch(lane, 'A');
+    const a = await signedIn(lane, 'a');
+    const b = await signedIn(lane, 'b');
+    const uri = `${lane.root}/notes/note-42`;
+    const endpoint = receiver({ deliveries: (_received, index) => new Response(null, { status: index === 0 ? 503 : 200 }) });
+    await subscribe(b, uri, endpoint.url(), newSecret());
+    await write(a, uri);
+    const held = () =>
+      page
+        .reports()
+        .filter((report) => report.kind === 'pending' || report.kind === 'attempt')
+        .map((report) => (report.kind === 'pending' ? `holds ${report.deliveries as number}` : `attempt ${report.outcome as string}`));
+    await vi.waitFor(() => expect(held()).toEqual(['holds 1', 'attempt 503', 'attempt 200', 'holds 0']), { timeout: 3000 });
+  });
+
   it('writes the subscription only once its handshake succeeds, so a write during the handshake is not delivered', async () => {
     const lane = newLane();
     const a = await signedIn(lane, 'a');
