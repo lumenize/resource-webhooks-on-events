@@ -95,9 +95,16 @@ export class Server extends DurableObject<Env> {
       clientDocument: (url) => this.#clientDocument(url),
       accountCap: Number(env.ACCOUNT_CAP),
     });
-    // The runtime runs the constructor again when an event brings A back from hibernation, so a
-    // page still connected hears that A was out of memory. A page connecting now is not yet one.
-    report(ctx, 'A', { kind: 'woke' });
+  }
+
+  // True from the constructor until the first event is handled. The runtime runs the constructor
+  // again when an event brings A back from hibernation, so a page still connected hears that A
+  // was out of memory, unless the event was a page's own, which only watching A causes.
+  #justStarted = true;
+
+  #woke(byPage: boolean): void {
+    if (this.#justStarted && !byPage) report(this.ctx, 'A', { kind: 'woke' });
+    this.#justStarted = false;
   }
 
   /**
@@ -107,9 +114,10 @@ export class Server extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.slice(this.#base.length);
+    this.#woke(path === '/page');
     if (path === '/page') {
       const accepted = acceptPage(this.ctx, 'A', this.env.VERSION);
-      this.#reportHoldings();
+      this.#reportHoldings({ byPage: true });
       return accepted;
     }
     const response = await this.#answer(request, url, path);
@@ -135,6 +143,7 @@ export class Server extends DurableObject<Env> {
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    this.#woke(this.ctx.getTags(socket).includes(PAGE_TAG));
     if (typeof message !== 'string' || !this.ctx.getTags(socket).includes(PAGE_TAG)) return;
     let control: Control;
     try {
@@ -164,6 +173,11 @@ export class Server extends DurableObject<Env> {
       socket.send(JSON.stringify({ type: 'unknown', action: control.action }));
     }
     this.#reportHoldings();
+  }
+
+  // A's only sockets are pages', so a page closing its channel is watching's own event.
+  async webSocketClose(): Promise<void> {
+    this.#woke(true);
   }
 
   // The client ID metadata document at `url`. The Worker's own clients' document comes from the
@@ -207,9 +221,10 @@ export class Server extends DurableObject<Env> {
   }
 
   // What A holds, to every page listening, and nothing computed when none is.
-  #reportHoldings(): void {
+  // `byPage` marks holdings sent only because a page connected, which the page shows as no event.
+  #reportHoldings({ byPage }: { byPage?: boolean } = {}): void {
     if (this.ctx.getWebSockets(PAGE_TAG).length === 0) return;
-    report(this.ctx, 'A', { kind: 'holdings', wipes: this.#wipes(), schedule: this.#schedule(), ...this.#role.holdings() });
+    report(this.ctx, 'A', { kind: 'holdings', wipes: this.#wipes(), schedule: this.#schedule(), ...this.#role.holdings(), ...(byPage ? { byPage } : {}) });
   }
 
   // The edge verified the token, but only A knows its Wipe count, so a token from before a Wipe

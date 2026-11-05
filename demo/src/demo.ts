@@ -241,8 +241,11 @@ function openChannel(party: 'A' | 'B'): void {
   });
   socket.addEventListener('message', (event) => {
     const message = JSON.parse(event.data as string) as Record<string, unknown>;
-    // A and B send only while they run, for an event, so each message says that party just ran.
-    state[party].activeAt = Date.now();
+    // A and B send only while they run, for an event, so each message says that party just ran,
+    // but for what a page's connecting brings, which only watching causes. The page's first
+    // connect counts, so the corner shows a state from the start.
+    const byPage = message.kind === 'hello' || message.byPage === true;
+    if (!byPage || state[party].activeAt === undefined) state[party].activeAt = Date.now();
     if (message.kind === 'woke') state[party].wokeAt = Date.now();
     if (party === 'A' && message.kind === 'pending') state.A.pending = message.deliveries as number;
     if (message.type === 'done' || message.type === 'refused' || message.type === 'unknown') {

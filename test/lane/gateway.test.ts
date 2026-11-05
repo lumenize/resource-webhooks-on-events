@@ -237,27 +237,36 @@ describe("The page's controls", () => {
     }
   });
 
-  it('tells each connected page when an event brings it back from hibernation, and not while it stays in memory', async () => {
+  it('tells each connected page when an event brings it back from hibernation, but not for a page of its own, nor while it stays in memory', async () => {
     // A gateway of its own, so no other test's work on B holds the eviction up.
     const stub = env.GATEWAY.getByName('wakes');
     const page = async () => {
       const socket = (await stub.fetch('https://b.example/gateway/wakes/page', { headers: { Upgrade: 'websocket' } })).webSocket!;
       socket.accept();
-      const kinds: string[] = [];
+      const reports: { kind?: string; byPage?: boolean }[] = [];
       socket.addEventListener('message', (event) => {
-        kinds.push((JSON.parse(event.data as string) as { kind?: string }).kind ?? '');
+        reports.push(JSON.parse(event.data as string) as { kind?: string; byPage?: boolean });
       });
-      return { socket, woke: () => kinds.filter((kind) => kind === 'woke').length };
+      return { socket, reports, woke: () => reports.filter(({ kind }) => kind === 'woke').length };
     };
+    // Its answer is read, since eviction waits for a request whose body is still unread.
+    const post = async () => (await stub.fetch('https://b.example/gateway/wakes/hooks/u_a/i_b', { method: 'POST', body: '{}' })).text();
     const first = await page();
     const second = await page();
+    await post();
     await sleep(50);
     expect([first.woke(), second.woke()]).toEqual([0, 0]);
-    // Evicting hibernates both sockets, and the next page's request runs the constructor again.
+    // The second page's connecting sent the first holdings it marks as only a page's.
+    expect(first.reports.filter(({ kind }) => kind === 'holdings').map(({ byPage }) => byPage === true)).toEqual([true, true]);
+    // Evicting hibernates both sockets. A page's connecting wakes B, which no page hears of, and
+    // the next event that is not a page's, once B is out of memory again, is heard of.
     await evictDurableObject(stub);
     const third = await page();
-    await vi.waitFor(() => expect([first.woke(), second.woke()]).toEqual([1, 1]));
-    expect(third.woke()).toBe(0);
+    await sleep(50);
+    expect([first.woke(), second.woke()]).toEqual([0, 0]);
+    await evictDurableObject(stub);
+    await post();
+    await vi.waitFor(() => expect([first.woke(), second.woke(), third.woke()]).toEqual([1, 1, 1]));
     for (const each of [first, second, third]) each.socket.close(1000, 'Done');
   });
 
@@ -274,14 +283,14 @@ describe("The page's controls", () => {
       return { socket, woke: () => kinds.filter((kind) => kind === 'woke').length };
     };
     const first = await page();
+    await evictDurableObject(stub);
     const second = await page();
     await sleep(50);
-    expect([first.woke(), second.woke()]).toEqual([0, 0]);
+    expect(first.woke()).toBe(0);
     await evictDurableObject(stub);
-    const third = await page();
+    await (await stub.fetch('https://a.example/server/wakes/elsewhere')).text();
     await vi.waitFor(() => expect([first.woke(), second.woke()]).toEqual([1, 1]));
-    expect(third.woke()).toBe(0);
-    for (const each of [first, second, third]) each.socket.close(1000, 'Done');
+    for (const each of [first, second]) each.socket.close(1000, 'Done');
   });
 
   it("closes every client's socket on B's Wipe", async () => {

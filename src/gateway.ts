@@ -48,17 +48,25 @@ export class Gateway extends DurableObject<Env> {
       forward: (client, message) => this.#forward(client, message),
       report: (body) => report(this.ctx, 'B', body),
     });
-    // The runtime runs the constructor again when an event brings B back from hibernation, so a
-    // page still connected hears that B was out of memory. A page connecting now is not yet one.
-    report(ctx, 'B', { kind: 'woke' });
+  }
+
+  // True from the constructor until the first event is handled. The runtime runs the constructor
+  // again when an event brings B back from hibernation, so a page still connected hears that B
+  // was out of memory, unless the event was a page's own, which only watching B causes.
+  #justStarted = true;
+
+  #woke(byPage: boolean): void {
+    if (this.#justStarted && !byPage) report(this.ctx, 'B', { kind: 'woke' });
+    this.#justStarted = false;
   }
 
   async fetch(request: Request): Promise<Response> {
     const name = this.ctx.id.name!;
     const path = new URL(request.url).pathname.slice(`/gateway/${name}`.length);
+    this.#woke(path === '/page');
     if (path === '/page') {
       const accepted = acceptPage(this.ctx, 'B', this.env.VERSION);
-      this.#reportHoldings();
+      this.#reportHoldings({ byPage: true });
       return accepted;
     }
     const socket = /^\/ws\/([^/]+)$/.exec(path);
@@ -74,6 +82,7 @@ export class Gateway extends DurableObject<Env> {
   }
 
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    this.#woke(this.ctx.getTags(socket).includes(PAGE_TAG));
     if (typeof message !== 'string') return;
     let parsed: { secret?: unknown; type?: unknown };
     try {
@@ -99,14 +108,16 @@ export class Gateway extends DurableObject<Env> {
   }
 
   async webSocketClose(socket: WebSocket, code: number, reason: string): Promise<void> {
+    this.#woke(this.ctx.getTags(socket).includes(PAGE_TAG));
     if (this.ctx.getTags(socket).includes(PAGE_TAG)) return;
     const { client } = socket.deserializeAttachment() as Attachment;
     report(this.ctx, 'B', { kind: 'closed', client, code, reason });
     // The runtime still lists a socket while its close is handled, so the report leaves it out.
-    this.#reportHoldings(socket);
+    this.#reportHoldings({ closing: socket });
   }
 
   async alarm(): Promise<void> {
+    this.#woke(false);
     this.#closeExpired();
     this.#reportHoldings();
     await this.#scheduleExpiry();
@@ -148,7 +159,8 @@ export class Gateway extends DurableObject<Env> {
 
   // Each client's socket and its secret, to every page listening, and nothing when none is, less
   // one closing. The report redacts each secret.
-  #reportHoldings(closing?: WebSocket): void {
+  // `byPage` marks holdings sent only because a page connected, which the page shows as no event.
+  #reportHoldings({ closing, byPage }: { closing?: WebSocket; byPage?: boolean } = {}): void {
     if (this.ctx.getWebSockets(PAGE_TAG).length === 0) return;
     const sockets = this.ctx
       .getWebSockets()
@@ -157,7 +169,7 @@ export class Gateway extends DurableObject<Env> {
         const { client, secret, connectedAt } = socket.deserializeAttachment() as Attachment;
         return { client, connectedAt, ...(secret ? { secret } : {}) };
       });
-    report(this.ctx, 'B', { kind: 'holdings', sockets });
+    report(this.ctx, 'B', { kind: 'holdings', sockets, ...(byPage ? { byPage } : {}) });
   }
 
   #forward(client: string, message: Forwarded): boolean {
