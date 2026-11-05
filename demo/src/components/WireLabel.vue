@@ -5,7 +5,8 @@ import type { WireView } from '../demo.ts';
 // Hovering a label opens its popover, and clicking pins it open. The page holds which one is
 // pinned, so pinning one unpins the others, and a click anywhere else unpins it. The popover lists
 // every exchange over the wire since the step began, oldest first.
-const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; since: string; above?: boolean; align?: 'left' | 'right' | 'center'; pinned?: boolean }>();
+// `quiet` is a wire with nothing crossing it, as an MCP or webhook wire between requests is.
+const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; since: string; above?: boolean; align?: 'left' | 'right' | 'center'; pinned?: boolean; quiet?: boolean }>();
 const emit = defineEmits<{ toggle: [] }>();
 const open = ref(false);
 const flash = ref(false);
@@ -59,7 +60,7 @@ function render(value: unknown, indent = ''): string {
 <template>
   <div
     class="wire-label"
-    :class="{ open: open || pinned, pinned, flash, above, [align ?? 'center']: true, empty: !view.log.length }"
+    :class="{ open: open || pinned, pinned, flash, quiet, above, [align ?? 'center']: true, empty: !view.log.length }"
     :style="{ left: `${x}%`, top: `${y}%`, '--c': `var(--${color})` }"
     @mouseenter="open = true"
     @mouseleave="open = false"
@@ -113,6 +114,17 @@ function render(value: unknown, indent = ''): string {
 
 .wire-label.open {
   z-index: 30;
+}
+
+/* A quiet wire's label dims, as its line does, until a message crosses it or it opens. */
+.tag,
+.what {
+  transition: opacity 300ms;
+}
+
+.wire-label.quiet:not(.open):not(.flash) .tag,
+.wire-label.quiet:not(.open):not(.flash) .what {
+  opacity: 0.4;
 }
 
 .wire-label.flash .tag {

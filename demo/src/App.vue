@@ -211,6 +211,7 @@ function dot(wire: WireName, from: PartyName) {
         :pinned="state.pinned === name"
         :view="state.wires[name]"
         :since="state.since"
+        :quiet="!lit.has(name) && !held(name)"
         @toggle="toggle(name)"
       />
     </main>
