@@ -11,6 +11,18 @@ const emit = defineEmits<{ toggle: [] }>();
 const open = ref(false);
 const flash = ref(false);
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
+// A note that the runtime answered a ping, shown briefly each time, as on a socket's label.
+const pong = ref(false);
+let pongTimer: ReturnType<typeof setTimeout> | undefined;
+watch(
+  () => props.view.pongAt,
+  (at) => {
+    if (at === undefined) return;
+    pong.value = true;
+    clearTimeout(pongTimer);
+    pongTimer = setTimeout(() => (pong.value = false), 1800);
+  },
+);
 // The label flashes as each message crosses its wire.
 watch(
   () => props.view.count,
@@ -71,6 +83,9 @@ function render(value: unknown, indent = ''): string {
       <span class="kind">{{ kind }}</span>
     </div>
     <div v-if="view.what" class="what mono">{{ view.what }}</div>
+    <Transition name="pong">
+      <div v-if="pong" class="pong">pong · answered without waking B</div>
+    </Transition>
     <div v-if="(open || pinned) && view.log.length" class="pop" @click.stop>
       <div class="pop-head">
         <span>{{ label }} · since {{ since }}</span>
@@ -114,6 +129,33 @@ function render(value: unknown, indent = ''): string {
 
 .wire-label.open {
   z-index: 30;
+}
+
+/* The note under a socket's label that the runtime answered a ping, so B did not wake. */
+.pong {
+  position: absolute;
+  top: calc(100% + 4px);
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--c) 50%, transparent);
+  background: var(--bg);
+  color: var(--c);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.pong-enter-active,
+.pong-leave-active {
+  transition:
+    opacity 250ms,
+    transform 250ms;
+}
+
+.pong-enter-from,
+.pong-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
 }
 
 /* A quiet wire's label dims, as its line does, until a message crosses it or it opens. */

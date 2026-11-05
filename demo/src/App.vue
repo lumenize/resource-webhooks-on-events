@@ -81,7 +81,7 @@ function onToken(): void {
 }
 
 const current = computed(() => Object.fromEntries(state.A.tickets.map(({ uri, revision }) => [uri, revision])));
-const lit = computed(() => new Set(state.pulses.map(({ wire }) => wire)));
+const lit = computed(() => new Set(state.pulses.filter(({ beat }) => !beat).map(({ wire }) => wire)));
 const scene = computed(() => currentScene());
 const steps = computed(() => scene.value.steps.map((each, i) => ({ ...each, n: i + 1 })));
 const caption = computed(() => {
@@ -150,7 +150,7 @@ function dot(wire: WireName, from: PartyName) {
           :marker-start="w.arrows === 'both' ? `url(#arrow-${w.color})` : undefined"
         />
       </svg>
-      <div v-for="p in state.pulses" :key="p.id" class="dot" :style="dot(p.wire, p.from)"></div>
+      <div v-for="p in state.pulses" :key="p.id" class="dot" :class="{ beat: p.beat }" :style="dot(p.wire, p.from)"></div>
 
       <PartyBox name="A" role="the server" color="A" area="1 / 1" :online="state.A.connected" :asleep="phaseA === 'hibernating'">
         <template #status><SleepStatus :phase="phaseA" :seconds="secondsA" /></template>
@@ -402,6 +402,17 @@ function dot(wire: WireName, from: PartyName) {
   background: var(--c);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 30%, transparent), 0 0 22px var(--c);
   animation: travel 900ms cubic-bezier(0.45, 0, 0.25, 1) forwards;
+}
+
+/* A heartbeat: a small hollow dot, quicker than a message. */
+.dot.beat {
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  background: var(--bg);
+  border: 2px solid var(--c);
+  box-shadow: 0 0 10px var(--c);
+  animation-duration: 650ms;
 }
 
 @keyframes travel {

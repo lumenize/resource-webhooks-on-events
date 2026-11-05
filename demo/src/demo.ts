@@ -66,6 +66,8 @@ export interface WireEntry {
 export interface WireView {
   /** Every exchange over the wire since the step began, oldest first, as the popover lists them. */
   log: WireEntry[];
+  /** When the runtime last answered a ping on the wire, by the page's clock, which it did without running B. */
+  pongAt?: number;
   /** What the label says the last message was, as `resources/collection/read ←`. */
   what?: string;
   count: number;
@@ -76,6 +78,8 @@ export interface Pulse {
   id: number;
   wire: WireName;
   from: PartyName;
+  /** A heartbeat's ping or pong, drawn smaller, which lights no wire. */
+  beat?: boolean;
 }
 
 /** One step of a scene: its title, the line shown under it once it is done, and what it does. */
@@ -163,9 +167,11 @@ export function saveToken(token: string): void {
 }
 
 let pulseId = 0;
-function pulse(wire: WireName, from: PartyName): void {
+/** How long a heartbeat's dot takes to cross its wire, as App's `.dot.beat` animates it. */
+const BEAT_MS = 650;
+function pulse(wire: WireName, from: PartyName, beat = false): void {
   const id = ++pulseId;
-  state.pulses.push({ id, wire, from });
+  state.pulses.push({ id, wire, from, ...(beat ? { beat } : {}) });
   setTimeout(() => {
     const index = state.pulses.findIndex((each) => each.id === id);
     if (index !== -1) state.pulses.splice(index, 1);
@@ -374,6 +380,7 @@ function hooksFor(client: Client): ClientHooks {
   const down: WireName = client === 'X' ? 'B-X' : 'B-Y';
   // Each MCP request's exchange, which its response joins.
   const exchanges = new WeakMap<Exchange, WireEntry>();
+  let pingAt = 0;
   return {
     sent(exchange: Exchange) {
       pulse(wire, client);
@@ -411,6 +418,19 @@ function hooksFor(client: Client): ClientHooks {
     },
     connected(on: boolean) {
       state[client].ready = on;
+    },
+    // The runtime answers each ping itself, so B's code never runs for one and B stays asleep.
+    // The pong is drawn once the ping's dot reaches B, since it comes back sooner than a dot moves.
+    beat(kind) {
+      if (kind === 'ping') {
+        pingAt = Date.now();
+        pulse(down, client, true);
+        return;
+      }
+      setTimeout(() => {
+        pulse(down, 'B', true);
+        state.wires[down].pongAt = Date.now();
+      }, Math.max(0, BEAT_MS - (Date.now() - pingAt)));
     },
     log(entry: LogEntry) {
       const view = state[client];

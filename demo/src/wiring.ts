@@ -36,6 +36,8 @@ export interface ClientHooks {
   socket(message: Record<string, unknown>): void;
   /** The client's socket to B opened, or closed. */
   connected(on: boolean): void;
+  /** A heartbeat crossed the socket: the client's ping to B, or the pong the runtime sent back. */
+  beat(kind: 'ping' | 'pong'): void;
   log(entry: LogEntry): void;
 }
 
@@ -245,6 +247,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     next.addEventListener('message', (event) => {
       // The runtime answers a ping with a bare pong, which is not JSON.
       if (event.data === 'pong') {
+        hooks.beat('pong');
         for (const resolve of pongs.splice(0)) resolve();
         return;
       }
@@ -281,7 +284,11 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     hookUrl = (await nextMessage(messages, arrived, ({ type }) => type === 'hook')).hookUrl as string;
     clearInterval(heartbeat);
     const every = Math.min(PING_MS, Number(registered.heartbeatMs) || PING_MS);
-    heartbeat = setInterval(() => next.readyState === WebSocket.OPEN && next.send('ping'), every);
+    heartbeat = setInterval(() => {
+      if (next.readyState !== WebSocket.OPEN) return;
+      next.send('ping');
+      hooks.beat('ping');
+    }, every);
     hooks.connected(true);
   }
 
@@ -312,6 +319,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
       });
     });
     socket.send('ping');
+    hooks.beat('ping');
     await pong;
   }
 
