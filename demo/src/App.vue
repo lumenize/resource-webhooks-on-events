@@ -114,7 +114,7 @@ function dot(wire: WireName, from: PartyName) {
   <div class="app">
     <header class="top">
       <div class="brand">
-        <h1>Resource Events</h1>
+        <h1>MCP Resource Events</h1>
         <select class="scene" :value="state.scene" :disabled="state.busy" aria-label="Scene" @change="onScene">
           <option v-for="item in SCENE_MENU" :key="item.id" :value="item.id">{{ item.title }}</option>
         </select>
