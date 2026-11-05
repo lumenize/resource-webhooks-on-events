@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import PartyBox from './components/PartyBox.vue';
 import SleepStatus from './components/SleepStatus.vue';
+import { useSleep } from './sleep.ts';
 import TicketTable from './components/TicketTable.vue';
 import WireLabel from './components/WireLabel.vue';
 import { chooseScene, currentScene, prepare, saveToken, SCENE_MENU, short, state, step, type PartyName, type WireName } from './demo.ts';
@@ -63,6 +64,8 @@ function toggle(name: WireName): void {
 }
 
 const CLIENTS = ['X', 'Y'] as const;
+// Whether B runs, idles or hibernates, which its corner shows and its box dims for.
+const { phase: sleepPhase, seconds: sleepSeconds } = useSleep(() => state.B.activeAt, () => state.B.wokeAt);
 const token = ref(state.operatorToken);
 function onToken(): void {
   saveToken(token.value);
@@ -157,8 +160,8 @@ function dot(wire: WireName, from: PartyName) {
         </ul>
       </PartyBox>
 
-      <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected">
-        <template #status><SleepStatus :active-at="state.B.activeAt" :woke-at="state.B.wokeAt" /></template>
+      <PartyBox name="B" role="the gateway" color="B" area="1 / 3" :online="state.B.connected" :asleep="sleepPhase === 'hibernating'">
+        <template #status><SleepStatus :phase="sleepPhase" :seconds="sleepSeconds" /></template>
         <p class="note">Takes each client's webhooks, checks each signature, and passes the event down that client's socket.</p>
         <div class="pair">
           <div v-for="client in CLIENTS" :key="client" class="half">

@@ -1,14 +1,20 @@
 <script setup lang="ts">
-defineProps<{ name: string; role: string; color: string; area: string; online?: boolean }>();
+// `online` is whether the page can see the party, and `asleep` whether it hibernates. A box can
+// put a status of its own in the corner while it is online, where the others say they are live.
+defineProps<{ name: string; role: string; color: string; area: string; online?: boolean; asleep?: boolean }>();
 </script>
 
 <template>
-  <section class="box" :class="{ offline: online === false }" :style="{ '--c': `var(--${color})`, gridArea: area }">
+  <section class="box" :class="{ offline: online === false, asleep: online !== false && asleep }" :style="{ '--c': `var(--${color})`, gridArea: area }">
     <header>
       <span class="badge">{{ name }}</span>
       <span class="role">{{ role }}</span>
-      <slot name="status" />
-      <span v-if="online !== undefined" class="online" :class="{ on: online }">{{ online ? 'live' : 'offline' }}</span>
+      <span class="corner">
+        <slot v-if="online !== false" name="status">
+          <span v-if="online !== undefined" class="online on">live</span>
+        </slot>
+        <span v-else class="online">offline</span>
+      </span>
     </header>
     <div class="body">
       <slot />
@@ -38,6 +44,17 @@ defineProps<{ name: string; role: string; color: string; area: string; online?: 
   opacity: 0.45;
 }
 
+/* A party that hibernates dims partway, fading as it leaves memory, since its sockets stay open
+   and the next event still reaches it. It wakes at once. */
+.box.asleep {
+  filter: saturate(0.3) brightness(0.8);
+  transition-duration: 1.2s;
+}
+
+.corner {
+  margin-left: auto;
+}
+
 header {
   display: flex;
   align-items: center;
@@ -65,7 +82,6 @@ header {
 }
 
 .online {
-  margin-left: auto;
   font-size: 13px;
   color: var(--faint);
   text-transform: uppercase;
