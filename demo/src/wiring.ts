@@ -250,7 +250,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
       }
       const message = JSON.parse(event.data as string) as Record<string, unknown>;
       messages.push(message);
-      hooks.socket(redact(message.type === 'delivery' ? { ...message, body: JSON.parse(message.body as string) } : message) as Record<string, unknown>);
+      hooks.socket(redact(message) as Record<string, unknown>);
       arrived.dispatchEvent(new CustomEvent('message', { detail: message }));
       if (message.type !== 'delivery') return;
       const body = JSON.parse(message.body as string) as Record<string, unknown>;

@@ -50,6 +50,8 @@ describe('B, the gateway', () => {
       [200, 'verified'],
     ]);
     expect(reports.slice(0, 2).every((report) => !('webhookId' in report) && !('client' in report))).toBe(true);
+    // B reports its answer's body, which for a refusal is B's own words, never the POST's.
+    expect(reports.map(({ body }) => body)).toEqual(['The signature does not verify', 'The signature does not verify', undefined]);
     expect(page.raw.join('\n')).not.toContain('planted');
     // An instance is URL-safe, so the edge routes no other, as a malformed escape, which fails no parse.
     expect((await postToB(lane, hookUrl(lane, { sub: b.sub, instance: '%E0%A4%A' }), BODY, await signedFor(listener.secret, BODY))).status).toBe(404);

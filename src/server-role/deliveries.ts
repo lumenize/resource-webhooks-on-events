@@ -30,6 +30,13 @@ export const MAX_ANSWER_BYTES = 4096;
 /** What the host reports to the page, which never sees a secret or a signature. */
 export type DeliveryReport =
   | {
+      /** A POST as A sends it, its signature cut to the scheme, as `v1,…`. */
+      kind: 'request';
+      url: string;
+      headers: Record<string, string>;
+      body: string;
+    }
+  | {
       kind: 'verification';
       url: string;
       outcome: 'verified' | 'failed' | 'cached';
@@ -137,6 +144,7 @@ export class Deliveries {
     const body = JSON.stringify({ type: 'verification', challenge });
     const headers = await deliveryHeaders(secret, `msg_verification_${randomId(16)}`, subscriptionId, body, nowSeconds());
     const generation = this.#generation;
+    this.#options.report?.({ kind: 'request', url, headers: forPage(headers), body });
     const result = await this.#options.send(url, headers, body, true);
     if ('failure' in result) {
       this.#options.report?.({ kind: 'verification', url, outcome: 'failed', failure: result.failure });
@@ -216,6 +224,7 @@ export class Deliveries {
       const headers = await deliveryHeaders(message.secret, message.webhookId, message.subscriptionId, message.body, nowSeconds());
       if (state.cancelled) break;
       state.posting = true;
+      this.#options.report?.({ kind: 'request', url: message.url, headers: forPage(headers), body: message.body });
       const result = await this.#options.send(message.url, headers, message.body, false);
       state.posting = false;
       const outcome = 'failure' in result ? result.failure : String(result.status);
@@ -266,6 +275,11 @@ export class Deliveries {
 
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+/** The headers of a POST for the page, each signature cut to its scheme, as `v1,…`. */
+function forPage(headers: Record<string, string>): Record<string, string> {
+  return { ...headers, 'webhook-signature': headers['webhook-signature'].replace(/,\S+/g, ',…') };
 }
 
 /** A random identifier of ASCII letters and digits, as webhook-id and challenges use. */

@@ -167,6 +167,27 @@ describe("A's handshake", () => {
     ]);
   });
 
+  it('reports each POST it sends, its challenge and its deliveries, with each signature cut to its scheme', async () => {
+    const lane = newLane();
+    const page = await watch(lane, 'A');
+    const a = await signedIn(lane, 'a');
+    const b = await signedIn(lane, 'b');
+    const uri = `${lane.root}/notes/note-42`;
+    const endpoint = receiver({ deliveries: () => new Response(null, { status: 200 }) });
+    await subscribe(b, uri, endpoint.url(), newSecret());
+    await write(a, uri);
+    await vi.waitFor(() => expect(page.reports().filter((report) => report.kind === 'request')).toHaveLength(2));
+    const sent = page.reports().filter((report) => report.kind === 'request') as { url: string; headers: Record<string, string>; body: string }[];
+    expect(sent.map(({ url, body }) => [url, (JSON.parse(body) as { type?: string; name?: string }).type ?? (JSON.parse(body) as { name?: string }).name])).toEqual([
+      [endpoint.url(), 'verification'],
+      [endpoint.url(), 'mcp.resource.collection.updated'],
+    ]);
+    // Each body and webhook-id is the one the endpoint got, and no signature reaches the page.
+    expect(sent.map(({ body, headers }) => [body, headers['webhook-id']])).toEqual(endpoint.received.map(({ body, headers }) => [body, headers.get('webhook-id')]));
+    expect(sent.map(({ headers }) => headers['webhook-signature'])).toEqual(['v1,…', 'v1,…']);
+    expect(page.raw.join('\n')).not.toContain(endpoint.received[1].headers.get('webhook-signature')!.slice(3));
+  });
+
   it('writes the subscription only once its handshake succeeds, so a write during the handshake is not delivered', async () => {
     const lane = newLane();
     const a = await signedIn(lane, 'a');

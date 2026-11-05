@@ -195,6 +195,7 @@ function dot(wire: WireName, from: PartyName) {
         :above="w.ly >= 50"
         :pinned="state.pinned === name"
         :view="state.wires[name]"
+        :since="state.since"
         @toggle="toggle(name)"
       />
     </main>

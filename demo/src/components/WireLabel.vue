@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import type { WireView } from '../demo.ts';
 
 // Hovering a label opens its popover, and clicking pins it open. The page holds which one is
-// pinned, so pinning one unpins the others, and a click anywhere else unpins it.
-const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; above?: boolean; align?: 'left' | 'right' | 'center'; pinned?: boolean }>();
+// pinned, so pinning one unpins the others, and a click anywhere else unpins it. The popover lists
+// every exchange over the wire since the step began, oldest first.
+const props = defineProps<{ label: string; kind: string; color: string; x: number; y: number; view: WireView; since: string; above?: boolean; align?: 'left' | 'right' | 'center'; pinned?: boolean }>();
 const emit = defineEmits<{ toggle: [] }>();
 const open = ref(false);
 const flash = ref(false);
@@ -20,26 +21,45 @@ watch(
 );
 
 function escape(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-// JSON, escaped, with its keys, strings and numbers coloured.
-const html = computed(() => {
-  if (props.view.last === undefined) return '';
-  const text = escape(typeof props.view.last === 'string' ? props.view.last : JSON.stringify(props.view.last, null, 2));
-  return text.replace(/("(?:[^"\\]|\\.)*")(\s*:)?|\b(-?\d+(?:\.\d+)?)\b|\b(true|false|null)\b/g, (match, string, colon, number, literal) => {
-    if (string) return colon ? `<span class="k">${string}</span>${colon}` : `<span class="s">${string}</span>`;
-    if (number) return `<span class="n">${number}</span>`;
-    if (literal) return `<span class="l">${literal}</span>`;
-    return match;
-  });
-});
+// A string holding a JSON object or array, parsed, as a resource's `text` or a webhook's body.
+function parsedJson(text: string): object | undefined {
+  if (!/^\s*[[{]/.test(text)) return undefined;
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === 'object' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const PARSED = '<span class="parsed" title="One string on the wire, parsed by this page to show it">/* parsed */</span> ';
+
+// JSON as HTML, its keys, strings and numbers coloured, and a string holding JSON shown parsed,
+// marked as parsed, since on the wire it is one escaped string.
+function render(value: unknown, indent = ''): string {
+  if (typeof value === 'string') {
+    const parsed = parsedJson(value);
+    return parsed ? PARSED + render(parsed, indent) : `<span class="s">${escape(JSON.stringify(value))}</span>`;
+  }
+  if (typeof value === 'number') return `<span class="n">${value}</span>`;
+  if (typeof value === 'boolean' || value === null) return `<span class="l">${String(value)}</span>`;
+  const inner = `${indent}  `;
+  if (Array.isArray(value)) {
+    return value.length ? `[\n${value.map((each) => inner + render(each, inner)).join(',\n')}\n${indent}]` : '[]';
+  }
+  const entries = Object.entries((value ?? {}) as Record<string, unknown>).filter(([, each]) => each !== undefined);
+  if (!entries.length) return '{}';
+  return `{\n${entries.map(([key, each]) => `${inner}<span class="k">${escape(JSON.stringify(key))}</span>: ${render(each, inner)}`).join(',\n')}\n${indent}}`;
+}
 </script>
 
 <template>
   <div
     class="wire-label"
-    :class="{ open: open || pinned, pinned, flash, above, [align ?? 'center']: true, empty: view.last === undefined }"
+    :class="{ open: open || pinned, pinned, flash, above, [align ?? 'center']: true, empty: !view.log.length }"
     :style="{ left: `${x}%`, top: `${y}%`, '--c': `var(--${color})` }"
     @mouseenter="open = true"
     @mouseleave="open = false"
@@ -50,12 +70,17 @@ const html = computed(() => {
       <span class="kind">{{ kind }}</span>
     </div>
     <div v-if="view.what" class="what mono">{{ view.what }}</div>
-    <div v-if="(open || pinned) && view.last !== undefined" class="pop" @click.stop>
+    <div v-if="(open || pinned) && view.log.length" class="pop" @click.stop>
       <div class="pop-head">
-        <span>Last message · {{ label }} · <span class="mono">{{ view.what }}</span></span>
+        <span>{{ label }} · since {{ since }}</span>
         <span class="hint">{{ pinned ? 'pinned: click anywhere to close' : 'click the label to pin' }}</span>
       </div>
-      <pre class="mono" v-html="html"></pre>
+      <div class="entries">
+        <section v-for="entry in view.log" :key="entry.id" class="entry">
+          <div class="entry-what mono">{{ entry.what }}</div>
+          <pre class="mono" v-html="render(entry.body)"></pre>
+        </section>
+      </div>
     </div>
   </div>
 </template>
@@ -183,10 +208,27 @@ const html = computed(() => {
   cursor: auto;
 }
 
+.entries {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+/* Each exchange, its request and response together, set apart from the next. */
+.entry + .entry {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.entry-what {
+  padding: 6px 14px 0;
+  font-size: 12.5px;
+  color: var(--c);
+}
+
 pre {
   margin: 0;
-  padding: 12px 14px;
-  overflow: auto;
+  padding: 4px 14px 10px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 13px;
@@ -208,5 +250,11 @@ pre :deep(.n) {
 
 pre :deep(.l) {
   color: #c4b5fd;
+}
+
+/* The page's own note that it parsed a string, as faint as a comment. */
+pre :deep(.parsed) {
+  color: var(--faint);
+  font-style: italic;
 }
 </style>

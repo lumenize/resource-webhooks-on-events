@@ -21,6 +21,8 @@ export type GatewayReport = {
   webhookId?: string;
   signature: 'verified' | 'failed' | 'stale' | 'unchecked';
   status: number;
+  /** B's answer's body: its own words for a refusal, or the challenge it echoes. */
+  body?: string;
 };
 
 export interface GatewayRoleOptions {
@@ -72,7 +74,7 @@ export class GatewayRole {
   }
 
   #answer(client: string, webhookId: string, signature: GatewayReport['signature'], answer: Answer): Answer {
-    this.#options.report?.({ kind: 'delivery', ...(signature === 'verified' ? { client, webhookId } : {}), signature, status: answer.status });
+    this.#options.report?.({ kind: 'delivery', ...(signature === 'verified' ? { client, webhookId } : {}), signature, status: answer.status, ...(answer.body ? { body: answer.body } : {}) });
     return answer;
   }
 }

@@ -1,8 +1,8 @@
 // The demo's state and its scenes. The first scene is the proposal's § *A simple happy path*, each
 // step doing what test/scenarios/events.ts does in that step, and the others are cases from its
 // § *Less common cases*, all against the Worker that serves this page.
-// A and B report what they hold over their back channels, and X and Y tell the page each message
-// they send and get, so every wire's last message can be shown.
+// A and B report what they hold and send over their back channels, and X and Y tell the page each
+// message they send and get, so every wire's messages since the step began can be shown.
 import { reactive } from 'vue';
 import type { LogEntry } from '../../src/client/copies.ts';
 import type { DeleteResourceResult, WriteContents, WriteResourceResult } from '../../src/extension-types.ts';
@@ -55,10 +55,18 @@ export interface ClientView {
   waiting: number;
 }
 
+/** One exchange over a wire, its request and its response together, or one message alone. */
+export interface WireEntry {
+  id: number;
+  /** What it was, as `resources/collection/read`. */
+  what: string;
+  body: Record<string, unknown>;
+}
+
 export interface WireView {
-  /** The last message over the wire, whole, as the page shows it on hover. */
-  last?: unknown;
-  /** What the label says the last message was, as `resources/collection/read`. */
+  /** Every exchange over the wire since the step began, oldest first, as the popover lists them. */
+  log: WireEntry[];
+  /** What the label says the last message was, as `resources/collection/read ←`. */
   what?: string;
   count: number;
 }
@@ -94,11 +102,11 @@ export interface Scene {
 
 const emptyClient = (): ClientView => ({ ready: false, copies: [], log: [], waiting: 0 });
 const emptyWires = (): Record<WireName, WireView> => ({
-  'A-B': { count: 0 },
-  'X-A': { count: 0 },
-  'Y-A': { count: 0 },
-  'B-X': { count: 0 },
-  'B-Y': { count: 0 },
+  'A-B': { log: [], count: 0 },
+  'X-A': { log: [], count: 0 },
+  'Y-A': { log: [], count: 0 },
+  'B-X': { log: [], count: 0 },
+  'B-Y': { log: [], count: 0 },
 });
 
 export const state = reactive({
@@ -115,6 +123,8 @@ export const state = reactive({
   X: emptyClient(),
   Y: emptyClient(),
   wires: emptyWires(),
+  /** Where the wires' popovers start: Auth/Reset, or the step under way. */
+  since: 'Auth/Reset',
   pulses: [] as Pulse[],
   /** The wire whose popover is pinned open, as step 5 pins the event's, until a click anywhere. */
   pinned: undefined as WireName | undefined,
@@ -147,11 +157,33 @@ function pulse(wire: WireName, from: PartyName): void {
   }, 1200);
 }
 
-function onWire(wire: WireName, what: string, last: unknown): void {
+let entryId = 0;
+
+// A new exchange over the wire, which a response may later join.
+function onWire(wire: WireName, what: string, label: string, body: Record<string, unknown>): WireEntry {
   const view = state.wires[wire];
-  view.what = what;
-  view.last = last;
+  view.log.push({ id: ++entryId, what, body });
+  view.what = label;
   view.count += 1;
+  return view.log.at(-1)!;
+}
+
+// Adds a response to its request's exchange, or, when a step began between them, starts a new one.
+function answer(wire: WireName, entry: WireEntry | undefined, label: string, body: Record<string, unknown>): void {
+  const view = state.wires[wire];
+  if (!entry || !view.log.includes(entry)) {
+    onWire(wire, entry?.what ?? label, label, { ...(entry?.body ?? {}), ...body });
+    return;
+  }
+  Object.assign(entry.body, body);
+  view.what = label;
+  view.count += 1;
+}
+
+// Empties every popover as a step begins, so each lists only what crossed its wire since.
+function clearWires(since: string): void {
+  state.wires = emptyWires();
+  state.since = since;
 }
 
 // Which client each hook and instance belongs to, so A's and B's reports can name X and Y.
@@ -164,8 +196,10 @@ function clientOfHook(url: string | undefined): Client | undefined {
   return undefined;
 }
 
-// The event bodies X and Y were sent, by webhook-id, so the A-to-B wire can show what A POSTed.
-const bodies = new Map<string, unknown>();
+// A's POSTs by webhook-id, so B's answer and A's outcome can join each, and B's answers that
+// came in before A's report of the POST, which B names by webhook-id only once it verifies.
+const posts = new Map<string, WireEntry>();
+const earlyAnswers: Record<string, unknown>[] = [];
 
 // ——— the back channels ———————————————————————————————————————————————————————
 
@@ -210,12 +244,36 @@ function fromA(report: Record<string, unknown>): void {
     }));
     return;
   }
-  if (report.kind === 'attempt' || report.kind === 'verification') {
-    const client = clientOfHook(report.url as string | undefined);
+  // Each POST as A sends it, which B's answer then joins.
+  if (report.kind === 'request') {
+    const url = report.url as string;
+    const headers = report.headers as Record<string, string>;
+    const client = clientOfHook(url);
+    const checking = (JSON.parse(report.body as string) as { type?: string }).type === 'verification';
+    const what = checking ? `A checks ${client ? `${client}’s` : 'a'} hook` : `A POSTs an event for ${client ?? 'a client'}`;
     pulse('A-B', 'A');
-    const what = report.kind === 'verification' ? `A checks ${client ? `${client}’s` : 'a'} hook` : `A POSTs an event for ${client ?? 'a client'}`;
-    onWire('A-B', what, { ...(report.webhookId ? { 'the event A POSTed': bodies.get(report.webhookId as string) ?? '(arriving)' } : {}), 'A reports': report });
+    const entry = onWire('A-B', what, what, { request: { method: 'POST', url, headers, body: report.body } });
+    const webhookId = headers['webhook-id'];
+    posts.set(webhookId, entry);
+    const early = earlyAnswers.findIndex((each) => each.webhookId === webhookId || each.webhookId === undefined);
+    if (early !== -1) fromB(earlyAnswers.splice(early, 1)[0]);
+    return;
   }
+  // A POST B never answered, as one that timed out, ends with what A saw, once B's answer has had
+  // time to arrive. A shows no status of a challenge's answer, which only B may report.
+  if (report.kind === 'attempt' || report.kind === 'verification') {
+    const entry = report.kind === 'attempt' ? posts.get(report.webhookId as string) : openPosts().filter(({ body }) => (body.request as { url?: string }).url === report.url).at(-1);
+    const outcome = String(report.failure ?? report.outcome);
+    const seen = report.kind === 'attempt' ? (/^\d+$/.test(outcome) ? { status: Number(outcome) } : { failure: outcome }) : report.failure ? { failure: report.failure } : undefined;
+    setTimeout(() => {
+      if (entry && seen && !('response' in entry.body)) answer('A-B', entry, entry.what, { response: seen });
+    }, 400);
+  }
+}
+
+// A's POSTs on the A-to-B wire still waiting for an answer, oldest first.
+function openPosts(): WireEntry[] {
+  return state.wires['A-B'].log.filter(({ body }) => !('response' in body));
 }
 
 function leafTemplate(named: string): string {
@@ -243,9 +301,14 @@ function fromB(report: Record<string, unknown>): void {
   if (report.kind === 'delivery') {
     const client = clientOfHook(report.client ? `/hooks/${report.client as string}` : undefined);
     if (client) state.B.lastStatus[client] = `${report.status as number}${report.signature === 'verified' ? ', signature verified' : ''}`;
-    const previous = state.wires['A-B'].last as Record<string, unknown> | undefined;
-    onWire('A-B', state.wires['A-B'].what ?? 'B answers', { ...(previous ?? {}), 'B answers': report });
-    state.wires['A-B'].count -= 1;
+    // B's answer joins A's POST, by webhook-id once the signature verified, else the oldest open.
+    const entry = report.webhookId ? posts.get(report.webhookId as string) : openPosts()[0];
+    if (!entry || 'response' in entry.body) {
+      earlyAnswers.push(report);
+      return;
+    }
+    const response = { status: report.status, ...(report.body ? { body: report.body } : {}) };
+    answer('A-B', entry, entry.what, { response });
   }
 }
 
@@ -280,20 +343,23 @@ function refresh(client: Client): void {
   view.waiting = party.held.length;
 }
 
-// The last message each client sent up its socket, so B's answer can show beside it.
-const sentUp: Partial<Record<Client, Record<string, unknown>>> = {};
+// The secret each client last sent up its socket, which B's answer joins.
+const sentUp: Partial<Record<Client, WireEntry>> = {};
 
 function hooksFor(client: Client): ClientHooks {
   const wire: WireName = client === 'X' ? 'X-A' : 'Y-A';
   const down: WireName = client === 'X' ? 'B-X' : 'B-Y';
+  // Each MCP request's exchange, which its response joins.
+  const exchanges = new WeakMap<Exchange, WireEntry>();
   return {
     sent(exchange: Exchange) {
       pulse(wire, client);
-      onWire(wire, `${exchange.method} →`, { request: { method: exchange.method, params: exchange.params } });
+      exchanges.set(exchange, onWire(wire, exchange.method, `${exchange.method} →`, { request: { method: exchange.method, params: exchange.params } }));
     },
     replied(exchange: Exchange) {
       pulse(wire, 'A');
-      onWire(wire, `${exchange.method} ←`, { request: { method: exchange.method, params: exchange.params }, reply: exchange.reply });
+      const entry = exchanges.get(exchange) ?? onWire(wire, exchange.method, `${exchange.method} ←`, { request: { method: exchange.method, params: exchange.params } });
+      answer(wire, entry, `${exchange.method} ←`, { response: exchange.reply });
       if (exchange.method === 'resources/collection/read' && !exchange.failed) readFrom[client] = (exchange.reply as { nextFrom?: string }).nextFrom;
       results[client].set(exchange.method, exchange);
       state[wire === 'X-A' ? 'X' : 'Y'].ready = true;
@@ -302,22 +368,20 @@ function hooksFor(client: Client): ClientHooks {
     socket(message) {
       if (message.type === 'delivery') {
         pulse(down, 'B');
-        if (message.webhookId) bodies.set(message.webhookId as string, message.body);
-        const body = message.body as { eventId?: string } | undefined;
-        onWire(down, `event ${short(body?.eventId)}`, message);
+        const { eventId } = JSON.parse(message.body as string) as { eventId?: string };
+        onWire(down, `event ${short(eventId)}`, `event ${short(eventId)}`, message);
         queueMicrotask(() => refresh(client));
       } else if (message.type === 'secret-registered' || message.type === 'secret-refused') {
         // B's answer to the secret the client sent up the socket, shown with it, as MCP's are.
         pulse(down, 'B');
-        onWire(down, 'secret ←', { request: sentUp[client], reply: message });
+        answer(down, sentUp[client], 'secret ←', { response: message });
       } else {
-        onWire(down, String(message.type), message);
+        onWire(down, String(message.type), String(message.type), message);
       }
     },
     socketSent(message) {
       pulse(down, client);
-      sentUp[client] = message;
-      onWire(down, 'secret →', { request: message });
+      sentUp[client] = onWire(down, 'secret', 'secret →', { request: message });
     },
     connected(on: boolean) {
       state[client].ready = on;
@@ -372,12 +436,13 @@ export function prepare(): Promise<void> {
     delete parties.X;
     delete parties.Y;
     hooks.clear();
-    bodies.clear();
+    posts.clear();
+    earlyAnswers.length = 0;
     delete readFrom.X;
     delete readFrom.Y;
     results.X.clear();
     results.Y.clear();
-    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), pinned: undefined });
+    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), since: 'Auth/Reset', pinned: undefined });
     state.status = 'Wiping A and B…';
     for (const party of ['A', 'B'] as const) {
       const answer = await control(party, 'wipe');
@@ -424,6 +489,8 @@ export function step(n: number): Promise<void> {
     if (n !== state.done + 1) throw new Error(`Step ${state.done + 1} comes next.`);
     const [x, y] = both();
     state.pinned = undefined;
+    // A step that follows the one before by itself shares its popovers.
+    if (!scene.steps[n - 1].auto) clearWires(`step ${n}`);
     await scene.steps[n - 1].run(x, y);
     state.done = n;
     const last = n === scene.steps.length;
@@ -439,7 +506,7 @@ export function chooseScene(id: string): void {
   parties.Y?.close();
   delete parties.X;
   delete parties.Y;
-  Object.assign(state, { scene: id, done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), pinned: undefined, error: '' });
+  Object.assign(state, { scene: id, done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), since: 'Auth/Reset', pinned: undefined, error: '' });
   state.status = 'Press Auth/Reset to prepare this scene.';
 }
 
