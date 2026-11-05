@@ -5,7 +5,7 @@ import SleepStatus from './components/SleepStatus.vue';
 import { useSleep } from './sleep.ts';
 import TicketTable from './components/TicketTable.vue';
 import WireLabel from './components/WireLabel.vue';
-import { chooseScene, currentScene, prepare, saveToken, SCENE_MENU, short, state, step, type PartyName, type WireName } from './demo.ts';
+import { chooseScene, currentScene, hasSocket, prepare, saveToken, SCENE_MENU, short, state, step, type PartyName, type WireName } from './demo.ts';
 
 // The stage is a 3 × 3 grid: the boxes take the corners, and the wires cross the middle column
 // and row. Every position below is a percentage of the stage, so the wires meet the boxes'
@@ -73,7 +73,7 @@ const { phase: phaseB, seconds: secondsB } = useSleep(() => state.B.activeAt, ()
 // request only while one is under way.
 function held(name: WireName): boolean {
   const w = WIRES[name];
-  return w.kind === 'WebSocket' && state.B.sockets.includes(w.to);
+  return w.kind === 'WebSocket' && (w.to === 'X' || w.to === 'Y') && hasSocket(w.to);
 }
 const token = ref(state.operatorToken);
 function onToken(): void {
@@ -177,7 +177,7 @@ function dot(wire: WireName, from: PartyName) {
           <div v-for="client in CLIENTS" :key="client" class="half">
             <div class="half-head"><span class="who" :style="{ color: `var(--${client})` }">{{ client }}</span></div>
             <h3>socket</h3>
-            <div :class="state.B.sockets.includes(client) ? 'ok' : 'none'">{{ state.B.sockets.includes(client) ? 'connected' : 'not connected' }}</div>
+            <div :class="hasSocket(client) ? 'ok' : 'none'">{{ hasSocket(client) ? 'connected' : 'not connected' }}</div>
             <h3>last delivery</h3>
             <div class="mono">{{ state.B.lastStatus[client] ?? '—' }}</div>
           </div>

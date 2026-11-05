@@ -128,11 +128,16 @@ export const state = reactive({
     activeAt: undefined as number | undefined,
     wokeAt: undefined as number | undefined,
   },
-  /** B's clients, and when B last ran and last woke from hibernation, by the page's clock. */
+  /**
+   * The clients B holds a socket for, by B's name for each, as `u_7Hq2…/i_Kp3…`, and when B last
+   * ran and last woke from hibernation, by the page's clock.
+   */
   B: { connected: false, sockets: [] as string[], lastStatus: {} as Record<string, string>, activeAt: undefined as number | undefined, wokeAt: undefined as number | undefined },
   X: emptyClient(),
   Y: emptyClient(),
   wires: emptyWires(),
+  /** X and Y by B's name for each, learned from the hook URL B sends down each socket. */
+  names: {} as Record<string, Client>,
   /** Where the wires' popovers start: Auth/Reset, or the step under way. */
   since: 'Auth/Reset',
   pulses: [] as Pulse[],
@@ -300,16 +305,20 @@ function leafTemplate(named: string): string {
   }
 }
 
+/** Whether B holds a socket for the client, as its last reports say. */
+export function hasSocket(client: Client): boolean {
+  return state.B.sockets.some((name) => state.names[name] === client);
+}
+
 function fromB(report: Record<string, unknown>): void {
   if (report.kind === 'holdings') {
     const sockets = (report.sockets as { client: string }[] | undefined) ?? [];
-    state.B.sockets = sockets.map(({ client }) => clientOfHook(`/${client}`) ?? client);
+    state.B.sockets = sockets.map(({ client }) => client);
     return;
   }
   // B reports a socket's close on its own, and its holdings only as the next socket opens.
   if (report.kind === 'closed') {
-    const client = clientOfHook(`/${report.client as string}`) ?? (report.client as string);
-    state.B.sockets = state.B.sockets.filter((each) => each !== client);
+    state.B.sockets = state.B.sockets.filter((each) => each !== report.client);
     return;
   }
   if (report.kind === 'delivery') {
@@ -390,6 +399,9 @@ function hooksFor(client: Client): ClientHooks {
         pulse(down, 'B');
         answer(down, sentUp[client], 'secret ←', { response: message });
       } else {
+        // B names the client in the hook URL it sends as the socket opens, which may be after
+        // B's report of the socket reached the page.
+        if (message.type === 'hook') state.names[String(message.hookUrl).split('/hooks/')[1]] = client;
         onWire(down, String(message.type), String(message.type), message);
       }
     },
@@ -456,7 +468,7 @@ export function prepare(): Promise<void> {
     delete readFrom.Y;
     results.X.clear();
     results.Y.clear();
-    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), since: 'Auth/Reset', pinned: undefined });
+    Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), names: {}, since: 'Auth/Reset', pinned: undefined });
     state.status = 'Wiping A and B…';
     for (const party of ['A', 'B'] as const) {
       const answer = await control(party, 'wipe');
@@ -774,7 +786,7 @@ const MISSED: Scene = {
       line: 'X’s socket to B closes, as a laptop’s does when it sleeps.',
       run: async (x) => {
         await x.offline(true);
-        await until(() => !state.B.sockets.includes('X'));
+        await until(() => !hasSocket('X'));
       },
     },
     {
