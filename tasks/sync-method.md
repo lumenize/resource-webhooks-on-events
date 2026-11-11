@@ -261,6 +261,22 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
 
 **Close-out notes:** `demo.ts` lost `readFrom`, `results`, `watches` and `answered`, which only the three-step start used.
 
+### Phase 4, written 2026-11-11
+
+**For the human:**
+
+- **The proposal is revised in the fork's working copy and not committed.** That file already held your uncommitted change to R10, R25, D27 and Q6, and a commit would have bundled it with this one. It is yours to read, commit and push. A copy of the file as it stood before this phase is in the session's scratchpad.
+- **"Catch-up" stays a word of the proposal,** defined as a sync that names a `from`, beside "first read", a sync that names none. Most rules that said catch-up are still right as they stand, so R14, R19, R21 and R23 changed by a few words each.
+- **R10 states `previousMoment` as an invariant:** no change the subscriber may read lies after it and before the event's moment. It then names the two moments that serve, and says a server SHOULD send the later. The prototype does exactly that.
+- **R18 lets a client subscribe with `events/subscribe` as a MAY,** since R20 already has the server list the event. It says such a client MUST then sync.
+- **The new decisions are D28 and D29, and the new question is Q8.** Q7's item is gone and nothing cites it, as you did with Q6. Neither D28 nor Q8 names anyone: both say "the working group's meeting on 2026-11-06".
+- **§ *Security Implications* now counts five points.** The new first one says a gateway that allows or denies subscribing by method name has to treat a sync that carries a `delivery` as an `events/subscribe`.
+- **The example "A writer's copy runs ahead of its catch-ups" is now "A writer's own event arrives late",** to match the restaged demo scene.
+
+**Retro notes:** the three checks the phase names all pass: this repo's `check-proposal.mjs` (43 numbers cited), the list of rule IDs, unchanged at 24, and the grep, which finds the old method names only in D28.
+
+**Close-out notes:** § *Tested, and not yet tested* still describes three calls, and waits for phase 5's count.
+
 ## Non-goals
 
 - **The video itself.** Its script, voiceover and capture are worked on outside this repo, once phase 3's page runs.
