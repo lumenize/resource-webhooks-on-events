@@ -4,9 +4,12 @@
 import { clientMetadataUrl } from '../../src/auth/metadata';
 import { Copies, PATCH_MIME_TYPES, type CollectionEvent, type Contents, type LogEntry } from '../../src/client/copies';
 import { createMcpClient, OAuthSession } from '../../src/client/mcp-client';
-import type { CatchUpCollectionResult, ReadCollectionResult, UriSpecification } from '../../src/extension-types';
+import type { SyncCollectionResult, UriSpecification } from '../../src/extension-types';
 import { fromBase64url } from '../../src/auth/signing';
-import { listen, subscribe, type Listener, type Party, type Tier } from './parties';
+import { listen, type Listener, type Party, type Tier } from './parties';
+
+/** The one method a client keeps a collection through. */
+export const SYNC = 'resources/collection/sync';
 
 /** A hold on the next request for one method, at the request or at its reply. */
 export interface Hold {
@@ -73,6 +76,8 @@ export interface GatedClient {
   forward(on: boolean): void;
   /** The events B delivered while forwarding was off. */
   held: CollectionEvent[];
+  /** The params of every sync the client has sent, in order. */
+  syncs(): Record<string, unknown>[];
 }
 
 /** A client of A, signed in as an account of its own, listening on B, with copies and a gate. */
@@ -88,9 +93,13 @@ export async function gatedClient(tier: Tier, name: string): Promise<GatedClient
   const listener = await listen(tier, party);
   const log: LogEntry[] = [];
   const copies = new Copies({
-    read: (named, cursor) => client.request<ReadCollectionResult>('resources/collection/read', { ...named, ...(cursor === undefined ? {} : { cursor }) }),
-    subscribe: (named) => subscribe(party, named, listener.hookUrl, listener.secret),
-    catchUp: (named, from) => client.request<CatchUpCollectionResult>('resources/collection/catchup', { ...named, from, patchMimeTypes: PATCH_MIME_TYPES }),
+    sync: (named, { from, cursor, subscribe }) =>
+      client.request<SyncCollectionResult>(SYNC, {
+        ...named,
+        ...(from === undefined ? {} : { from, patchMimeTypes: PATCH_MIME_TYPES }),
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(subscribe ? { delivery: { mode: 'webhook', url: listener.hookUrl, secret: listener.secret }, ttlMs: 3_600_000 } : {}),
+      }),
     readResource: async (uri) => ((await client.request('resources/read', { uri })).contents as Contents[])[0],
     log: (entry) => log.push(entry),
   });
@@ -106,7 +115,8 @@ export async function gatedClient(tier: Tier, name: string): Promise<GatedClient
     if (forwarding) void copies.event(event);
     else held.push(event);
   });
-  return { party, gate: theGate, copies, listener, log, forward: (on) => (forwarding = on), held };
+  const syncs = () => theGate.requests.filter(({ method }) => method === SYNC).map(({ params }) => params);
+  return { party, gate: theGate, copies, listener, log, forward: (on) => (forwarding = on), held, syncs };
 }
 
 /** The lane's uri-specification for a path relative to A's root. */

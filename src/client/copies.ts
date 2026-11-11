@@ -1,15 +1,16 @@
-// A client's copies of the resources it watches, kept current by the client's rules. For each
-// uri-specification it watches, it reads the collection, subscribes and catches up (R18), keeps
-// the moment it is caught up to (R8), and catches up again when an event names a change it lacks
-// (R11), when it may have missed one (R12), and while a catch-up says there is more (R14). It runs
-// one read or run of catch-ups per uri-specification at a time, and an event that arrives meanwhile
-// waits for it (R16). Outside a start-over's read, a copy changes only for a later revision (R15),
-// from its own write's reply for the one resource it wrote (R9), and a patch applies only to the
-// copy it starts from, or the client reads the resource (R19). A moment too old or too large
-// starts the collection over (R21, R14, R23). It imports, besides types, the copied merge patch,
-// the template matcher and the revision's `_meta` key, by `.ts` paths, so Node runs it with types
-// stripped.
-import type { CatchUpCollectionResult, ChangeSetEntry, CollectionChange, CollectionUpdatedData, ReadCollectionResult, UriSpecification, WriteContents } from '../extension-types.ts';
+// A client's copies of A's resources, kept by the client's rules. It keeps a collection through
+// one call, `resources/collection/sync`: a first read with its delivery when it starts watching or
+// starts over (R18, R23), and a catch-up from the moment it is caught up to when an event names a
+// change it lacks or shows an earlier event unaccounted for (R11), when it may have missed one
+// (R12), and while a result says there is more (R14, R26). An event whose changes it holds, as
+// its own write's, moves it forward with no call (R11). It runs one sync, or run of them, per
+// uri-specification at a time, and an event that arrives meanwhile waits for it (R16). Outside a
+// first read, a copy changes only for a later revision (R15), from its own write's reply for the
+// one resource it wrote (R9), and a patch applies only to the copy it starts from, or the client
+// reads the resource (R19). A moment too old or too large starts the collection over (R21, R14,
+// R23). It imports, besides types, the copied merge patch, the template matcher and the
+// revision's `_meta` key, by `.ts` paths, so Node runs it with types stripped.
+import type { ChangeSetEntry, CollectionChange, CollectionUpdatedData, SyncCollectionResult, UriSpecification, WriteContents } from '../extension-types.ts';
 import { RESOURCE_REVISION_META_KEY } from '../extension-types.ts';
 import { templateCovers, templateMatcher } from '../server-role/uri-templates.ts';
 import { applyMergePatch, type JsonValue } from '../vendor/lumenize-merge-patch/merge-patch.ts';
@@ -38,13 +39,19 @@ export type LogEntry =
   | { kind: 'read failed'; uri: string }
   | { kind: 'poll failed'; named: UriSpecification; error: string };
 
+/** What one sync asks for beyond its uri-specification. */
+export interface SyncRequest {
+  /** The moment the client is caught up to. Absent for a first read. */
+  from?: string;
+  /** The `nextCursor` of a first read's previous page. */
+  cursor?: string;
+  /** Whether the caller adds its `delivery`, so the sync makes the subscription or refreshes it (R18). */
+  subscribe?: boolean;
+}
+
 export interface CopiesOptions {
-  /** One page of `resources/collection/read`. */
-  read(named: UriSpecification, cursor?: string): Promise<ReadCollectionResult>;
-  /** `events/subscribe` for the uri-specification, or its refresh. */
-  subscribe(named: UriSpecification): Promise<unknown>;
-  /** One `resources/collection/catchup`, listing the patch formats the client applies. */
-  catchUp(named: UriSpecification, from: string): Promise<CatchUpCollectionResult>;
+  /** One `resources/collection/sync`, listing the patch formats the client applies. */
+  sync(named: UriSpecification, request: SyncRequest): Promise<SyncCollectionResult>;
   /** `resources/read` of one resource, for a patch that starts from a revision the client lacks. */
   readResource(uri: string): Promise<Contents>;
   log?(entry: LogEntry): void;
@@ -54,7 +61,7 @@ interface Watched {
   named: UriSpecification;
   /** Whether a uri is in the collection. */
   covers: (uri: string) => boolean;
-  /** The moment the client is caught up to, once a read of it, or a catch-up of a wider one, has set it. */
+  /** The moment the client is caught up to, once a first read of it, or a sync of a wider one, has set it. */
   caughtUpTo?: string;
   /** The tail of its runs, so each starts once the one before has ended (R16). */
   tail: Promise<void>;
@@ -88,9 +95,9 @@ export class Copies {
   }
 
   /**
-   * Starts watching a uri-specification: it reads the collection, subscribes, then catches up
-   * (R18). One it watches already waits for what is under way, and one whose watch fails is not
-   * watched, so a later call starts it afresh.
+   * Starts watching a uri-specification: one sync that reads the collection and subscribes, and
+   * more only while a result says so (R18, R26). One it watches already waits for what is under
+   * way, and one whose watch fails is not watched, so a later call starts it afresh.
    */
   watch(named: UriSpecification): Promise<void> {
     const key = keyOf(named);
@@ -100,9 +107,7 @@ export class Copies {
     this.#watched.set(key, watched);
     return this.#run(watched, async () => {
       try {
-        const read = await this.#read(watched);
-        await this.#options.subscribe(named);
-        await this.#afterRead(watched, read);
+        await this.#firstRead(watched);
       } catch (error) {
         this.#watched.delete(key);
         throw error;
@@ -111,22 +116,33 @@ export class Copies {
   }
 
   /**
-   * Handles an event for a watched uri-specification: it catches up unless it already holds each
-   * uri the event lists, or its tombstone, at that entry's revision or later, so a writer skips its
-   * own change (R11). An event with no `changes` always brings a catch-up. It waits for any read or
-   * run of catch-ups under way (R16), and applies R11 once that has ended.
+   * Handles an event for a watched uri-specification, by its `previousMoment`, the moment of the
+   * event before it on the subscription (R11). When that is later than the moment the client is
+   * caught up to, the client has not accounted for the earlier event, and syncs, whatever it
+   * holds. Otherwise, when it holds each uri the event lists, or its tombstone, at that entry's
+   * revision or later, as a writer holds its own change, it moves forward to the event's moment
+   * with no call. Otherwise it syncs. An event with no `changes`, or none listed, always brings a
+   * sync, and one with no `previousMoment` never moves the client. It waits for any sync or run
+   * of them under way (R16), and applies R11 once that has ended.
    */
   event(event: CollectionEvent): Promise<void> {
     const watched = this.#watched.get(keyOf(event.data));
     if (!watched) return Promise.resolve();
     return this.#run(watched, async () => {
-      const held = event.data.changes?.every(({ uri, revision }) => {
-        const copy = this.#copies.get(uri);
-        return copy !== undefined && copy.revision >= revision;
-      });
-      if (!held) await this.#catchUpRun(watched);
-      // Logged once the catch-up has ended, so whoever waits on the log sees the copies after it.
-      this.#options.log?.({ kind: 'event', eventId: event.eventId, outcome: held ? 'skipped' : 'caught up' });
+      const { previousMoment, changes } = event.data;
+      const held =
+        changes !== undefined &&
+        changes.length > 0 &&
+        changes.every(({ uri, revision }) => {
+          const copy = this.#copies.get(uri);
+          return copy !== undefined && copy.revision >= revision;
+        });
+      const linked = typeof previousMoment === 'string';
+      const unaccounted = linked && previousMoment > watched.caughtUpTo!;
+      if (unaccounted || !held) await this.#syncRun(watched);
+      else if (linked) this.#caughtUp(watched, changes.reduce((greatest, { revision }) => (revision > greatest ? revision : greatest), ''));
+      // Logged once the sync has ended, so whoever waits on the log sees the copies after it.
+      this.#options.log?.({ kind: 'event', eventId: event.eventId, outcome: unaccounted || !held ? 'caught up' : 'skipped' });
     });
   }
 
@@ -137,16 +153,23 @@ export class Copies {
       watched.map((each) =>
         this.#run(each, async () => {
           this.#options.log?.({ kind: 'trigger', trigger, named: each.named });
-          await this.#catchUpRun(each);
+          await this.#syncRun(each);
         }),
       ),
     ).then(() => undefined);
   }
 
-  /** Refreshes the subscription, as SEP-3415 asks before its grant runs out, then catches up (R12). */
-  async refresh(named: UriSpecification): Promise<void> {
-    await this.#options.subscribe(named);
-    await this.trigger('refreshed', named);
+  /**
+   * Refreshes the subscription, as SEP-3415 asks before its grant runs out, and catches up, in one
+   * sync that carries the client's delivery (R12).
+   */
+  refresh(named: UriSpecification): Promise<void> {
+    const watched = this.#watched.get(keyOf(named));
+    if (!watched) return Promise.resolve();
+    return this.#run(watched, async () => {
+      this.#options.log?.({ kind: 'trigger', trigger: 'refreshed', named });
+      await this.#syncRun(watched, true);
+    });
   }
 
   /**
@@ -162,7 +185,7 @@ export class Copies {
   }
 
   /**
-   * Catches up on the uri-specification every `max(nextPollMs, floorMs)`, following a run with
+   * Syncs the uri-specification every `max(nextPollMs, floorMs)`, following a run with
    * `hasMore` true to its end with no wait, as a client that can't take webhooks does, until
    * `signal` aborts (R13, R14). A run that fails is logged, and the next comes after the floor.
    * The floor is SEP-3415's default, 1000 ms.
@@ -174,7 +197,7 @@ export class Copies {
       let wait = floorMs;
       try {
         await this.#run(watched, async () => {
-          const next = (await this.#catchUpRun(watched))?.nextPollMs;
+          const next = (await this.#syncRun(watched))?.nextPollMs;
           wait = typeof next === 'number' && Number.isFinite(next) ? Math.max(next, floorMs) : floorMs;
         });
       } catch (error) {
@@ -200,20 +223,22 @@ export class Copies {
     return run;
   }
 
-  // Catch-ups from the moment the client is caught up to, until one has `hasMore` false (R14).
-  // A moment too old or too large starts the collection over (R21, R14), and a catch-up whose
-  // changes the client can't apply in full leaves it caught up to its `from` (R19).
-  async #catchUpRun(watched: Watched): Promise<CatchUpCollectionResult | undefined> {
-    for (;;) {
-      let result: CatchUpCollectionResult;
+  // Syncs from the moment the client is caught up to, until one has `hasMore` false (R14), the
+  // first with the client's delivery when `subscribe` says so. A moment too old or too large
+  // starts the collection over (R21, R14), and a sync whose changes the client can't apply in
+  // full leaves it caught up to its `from` (R19).
+  async #syncRun(watched: Watched, subscribe = false): Promise<SyncCollectionResult | undefined> {
+    for (let first = true; ; first = false) {
+      let result: SyncCollectionResult;
       try {
-        result = await this.#options.catchUp(watched.named, watched.caughtUpTo!);
+        result = await this.#options.sync(watched.named, { from: watched.caughtUpTo!, ...(first && subscribe ? { subscribe } : {}) });
       } catch (error) {
         const reason = (error as { data?: { reason?: string } }).data?.reason;
         if (reason !== 'momentExpired' && reason !== 'momentTooLarge') throw error;
         this.#options.log?.({ kind: 'started over', named: watched.named, reason });
-        // The read's own catch-ups run to the end, from past the moment that was too large.
-        return this.#afterRead(watched, await this.#read(watched));
+        // A's refusal wrote no subscription, and a wiped A holds none, so the first read carries
+        // the delivery, as a new client's does. Its own syncs run to the end.
+        return this.#firstRead(watched);
       }
       if (!(await this.#apply(result.changes))) return result;
       this.#caughtUp(watched, result.nextFrom);
@@ -221,39 +246,32 @@ export class Copies {
     }
   }
 
-  // Reads the collection, every page, replacing each copy its pages name, even with an earlier
-  // revision, since a read's pages are not R15's later-only changes, and answers the uris they
-  // named and the read's `nextFrom` (R22, R23).
-  async #read(watched: Watched): Promise<{ named: Set<string>; nextFrom: string }> {
+  // A first read, with the client's delivery: every page, replacing each copy its pages name,
+  // even with an earlier revision, since a first read's entries are not R15's later-only changes
+  // (R22, R23). Every page repeats the first one's `nextFrom`, and a paged read ends with
+  // `hasMore` true, so the syncs after it, from that `nextFrom`, bring what changed while it paged
+  // (R26). Then each copy in the collection that neither the pages nor those syncs named goes, if
+  // it is at or before the last `nextFrom` they applied (R23). The syncs keep their own `from`,
+  // since a wider uri-specification's sync may move this one's forward meanwhile (R8).
+  async #firstRead(watched: Watched): Promise<SyncCollectionResult> {
     const named = new Set<string>();
-    let page = await this.#options.read(watched.named);
-    const nextFrom = page.nextFrom;
+    let last = await this.#options.sync(watched.named, { subscribe: true });
+    let from = last.nextFrom;
     for (;;) {
-      for (const contents of page.contents) {
-        named.add(contents.uri);
-        this.#copies.set(contents.uri, { revision: revisionOf(contents), deleted: false, contents });
+      for (const { uri, revision, contents } of last.changes) {
+        named.add(uri);
+        if (contents) this.#copies.set(uri, { revision, deleted: false, contents });
       }
-      if (page.nextCursor === undefined) break;
-      page = await this.#options.read(watched.named, page.nextCursor);
+      if (last.nextCursor === undefined) break;
+      last = await this.#options.sync(watched.named, { cursor: last.nextCursor });
     }
-    return { named, nextFrom };
-  }
-
-  // The catch-ups after a read, from its `nextFrom`, until one has `hasMore` false. Then each copy
-  // in the collection that neither the read nor they named goes, if it is at or before the last
-  // `nextFrom` they applied (R23). They keep their own `from`, since a wider uri-specification's
-  // catch-up may move this one's forward meanwhile (R8).
-  async #afterRead(watched: Watched, { named, nextFrom }: { named: Set<string>; nextFrom: string }): Promise<CatchUpCollectionResult | undefined> {
-    let from = nextFrom;
     this.#caughtUp(watched, from);
-    let last: CatchUpCollectionResult | undefined;
-    for (;;) {
-      last = await this.#options.catchUp(watched.named, from);
+    while (last.hasMore) {
+      last = await this.#options.sync(watched.named, { from });
       for (const { uri } of last.changes) named.add(uri);
       if (!(await this.#apply(last.changes))) break;
       from = last.nextFrom;
       this.#caughtUp(watched, from);
-      if (!last.hasMore) break;
     }
     for (const [uri, copy] of this.#copies) {
       if (watched.covers(uri) && !named.has(uri) && copy.revision <= from) this.#copies.delete(uri);
@@ -261,7 +279,7 @@ export class Copies {
     return last;
   }
 
-  // Applies a catch-up's changes, each as R15 and R19 say, and answers whether every one applied.
+  // Applies a sync's changes after a `from`, each as R15 and R19 say, and answers whether every one applied.
   async #apply(changes: readonly CollectionChange[]): Promise<boolean> {
     let all = true;
     for (const change of changes) {

@@ -6,5 +6,5 @@ import { eventsScenario } from '../scenarios/events';
 import { deployedTier } from './tier';
 
 describe('the extension on the deployed Worker', () => {
-  it("takes the proposal's simple happy path: two clients read, subscribe and catch up, one writes, both hear it, and the other catches up with a patch", () => eventsScenario(deployedTier()));
+  it("takes the proposal's simple happy path: two clients sync with a delivery, one writes, both hear it, the writer moves with no call, and the other syncs and gets a patch", () => eventsScenario(deployedTier()));
 });

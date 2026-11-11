@@ -177,9 +177,9 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
      - S16. The proposal's R9 example: X is caught up to `"107"`, Y updates ticket-9 at `"108"` and that event is held back, then X updates ticket-3 at `"109"`. Event `"109"` carries `previousMoment: "108"`, so X syncs, though it holds ticket-3, and then holds ticket-9. The held event, released, brings no request.
      - S17. On the shared layout, Y syncs once after a note's change, then writes a ticket. Y ends caught up to A's latest moment, with no request after the write.
      - S18. An event with no `changes`, or an empty list, brings a sync. An event with no `previousMoment` whose changes the client holds brings no request and no move.
-     - S19. After A restarts with one delivery dropped, a client whose own write is the next event still syncs, and then holds the dropped change.
+     - S19. A client whose own write's event follows one that never reached it still syncs, and then holds the change it had not heard of. S16's first half shows it, since an event the client has not been given is, to the client, a lost one. S8 shows the server's half across a restart.
      - S20. In the paged lane, with events held back by `forward(false)`, a ticket that sorts before the cursor is created between two pages. It is in X's copies as soon as `watch` resolves, and X's last request was a sync from the first page's `nextFrom` with no `cursor`.
-   - **Mutation note,** by criterion: S14, a sync after `hasMore: false`. S15, dropping the move. S16, moving without comparing `previousMoment`. S17, syncing whenever `previousMoment` differs from the client's moment. S18, treating absent `changes` as held, or a missing `previousMoment` as not later. S19, the same in-memory value as S8. S20, ending the loop at the last `nextCursor`.
+   - **Mutation note,** by criterion: S14, a sync after `hasMore: false`. S15, dropping the move. S16, moving without comparing `previousMoment`. S17, syncing whenever `previousMoment` differs from the client's moment. S18, treating absent `changes` as held, or a missing `previousMoment` as not later. S19, as S16. S20, ending the loop at the last `nextCursor`.
 
 3. **The demo page runs the four-step happy path, and Y's moment moves on screen.**
    - **`demo/src/wiring.ts`:** the three options become one, and the two gates, `subscribe` and `catchUp`, become one gate on a client's first sync.
@@ -226,6 +226,23 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
 - A challenge that is not echoed answers `-32027`, not SEP-3415's `-32022`, which the first draft of the refusal table assumed.
 
 **Close-out notes:** none yet. The comments that count the extension's methods as two are wrong until phase 5, which lists them.
+
+### Phase 2, built 2026-11-11
+
+**For the human:**
+
+- **S19 has no test of its own.** Its client half is S16's first step, and its server half is S8. A run that loses a real delivery across A's restart and then has the client write would need a gated client that can reconnect its socket, which `test/client/gate.ts` does not offer. Say so if you want that run added.
+- **`refresh` no longer calls `trigger`.** It logs `refreshed` and runs one sync that carries the delivery. `trigger('refreshed')` still exists and syncs with no delivery, as a client that refreshed by `events/subscribe` would.
+- **The log's outcomes are still `skipped` and `caught up`.** An event that moves the client with no call logs `skipped`, since the demo page and several tests read that word. Phase 3 can show the move from `caughtUpTo`.
+- **`demo/src/wiring.ts` does not compile until phase 3,** as the phase said.
+
+**Retro notes:**
+
+- The first full run after the rewrite was green, 495 tests, so each criterion got a mutation again: ten, each red where intended. Several mutations also redden neighbouring tests, which share the one event rule.
+- A's delivery slot merges a second event into one whose POST is still out. The R9 example's test waits for A's report of the first POST's `200` before the client writes, or its own event would arrive merged with the earlier one.
+- With the subscription made on the first page, a change during a paged first read now reaches the client as a real event. The paged tests hold events back with `forward(false)` so only the watch's own syncs can bring the change.
+
+**Close-out notes:** `test/client/gate.ts` no longer imports `subscribe` from `parties.ts`, which the events tests still use.
 
 ## Non-goals
 

@@ -1,15 +1,15 @@
-// The client's copies, kept by the client's rules against real A and B, with a gate on the
-// client's transport that holds a request or a reply until the test releases it (R8, R9, R11,
-// R12, R15, R16, R18, R19, R21, R23), on both layouts but where a test names one. Paging,
-// stopping short and the moment cap have their own lanes.
+// The client's copies, kept by the client's rules against real A and B through one method,
+// `resources/collection/sync`, with a gate on the client's transport that holds a request or a
+// reply until the test releases it (R8, R9, R11, R12, R15, R16, R18, R19, R21, R23), on both
+// layouts but where a test names one. Paging, stopping short and the moment cap have their own lanes.
 import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ChangeSetEntry } from '../../src/extension-types';
 import { deliveryHeaders } from '../../src/standard-webhooks';
 import { NETWORK_WAIT, watch, type Party } from '../client/parties';
-import { gatedClient, namedAt } from '../client/gate';
+import { gatedClient, namedAt, SYNC } from '../client/gate';
 import { callWorker, LAYOUTS, newLane, type Lane } from './lane';
-import { create, remove, update } from './resources';
+import { create, remove, timelines, update } from './resources';
 
 const ticket = (title: string, status: 'open' | 'closed' = 'open') => ({ title, status });
 
@@ -26,42 +26,47 @@ afterEach(() => {
 });
 
 describe.each(LAYOUTS)('on the %s layout', (layout) => {
-  it('R18: reads, subscribes, then catches up, so a change made while the subscribe is held arrives through the catch-up', async () => {
+  it('R18: starts with one sync that carries its delivery, holds every resource, and hears of the next change', async () => {
     const lane = newLane(layout);
     const x = await gatedClient(lane, 'x');
-    await create(lane, 'tickets/ticket-3', ticket('Printer jams'));
-    const held = x.gate.hold('events/subscribe', 'request');
-    const watching = x.copies.watch(namedAt(lane, 'tickets/{id}'));
-    await held.reached;
+    const three = await create(lane, 'tickets/ticket-3', ticket('Printer jams'));
+    const named = namedAt(lane, 'tickets/{id}');
+    await x.copies.watch(named);
+    expect(x.gate.sent.filter((method) => method.startsWith('resources/collection') || method.startsWith('events/'))).toEqual([SYNC]);
+    expect(x.syncs()).toEqual([expect.objectContaining({ ...named, delivery: { mode: 'webhook', url: x.listener.hookUrl, secret: x.listener.secret } })]);
+    expect(x.syncs()[0]).not.toHaveProperty('from');
+    expect(x.copies.copy(`${lane.root}/tickets/ticket-3`)).toMatchObject({ revision: three.revision, deleted: false });
+    expect(x.copies.caughtUpTo(named)).toBe(three.revision);
+    // The one call subscribed too, so the next change reaches X as an event, and X syncs from where it is.
     const four = await create(lane, 'tickets/ticket-4', ticket('Toner'));
-    held.release();
-    await watching;
-    expect(x.gate.sent.filter((method) => method.startsWith('resources/collection') || method === 'events/subscribe')).toEqual([
-      'resources/collection/read',
-      'events/subscribe',
-      'resources/collection/catchup',
-    ]);
-    expect(x.copies.copy(`${lane.root}/tickets/ticket-4`)?.revision).toBe(four.revision);
-    expect(x.copies.copy(`${lane.root}/tickets/ticket-3`)?.deleted).toBe(false);
+    await vi.waitFor(() => expect(x.copies.copy(`${lane.root}/tickets/ticket-4`)?.revision).toBe(four.revision), NETWORK_WAIT);
+    expect(x.syncs()).toHaveLength(2);
+    expect(x.syncs()[1]).toMatchObject({ from: three.revision });
+    expect(x.syncs()[1]).not.toHaveProperty('delivery');
   });
 
-  it('R11: skips the catch-up for an event whose every uri it holds at that revision or later, a tombstone included, and catches up otherwise', async () => {
+  it('R11: makes no sync for an event whose every uri it holds at that revision or later, a tombstone included, and moves to its moment, and syncs otherwise', async () => {
     const lane = newLane(layout);
     const x = await gatedClient(lane, 'x');
     const opened = await create(lane, 'tickets/ticket-3', ticket('Printer jams'));
-    await x.copies.watch(namedAt(lane, 'tickets/{id}'));
-    const catchUps = () => x.gate.sent.filter((method) => method === 'resources/collection/catchup').length;
+    const named = namedAt(lane, 'tickets/{id}');
+    await x.copies.watch(named);
+    const catchUps = () => x.syncs().length;
     const before = catchUps();
+    const latest = async () => (await timelines(lane))[layout === 'split' ? 'tickets' : 'work'].latest;
 
-    // X's own write, whose event it skips.
+    // X's own write, whose event moves X to A's latest moment with no request.
     const own = await updateAs(x.party, lane, 'tickets/ticket-3', ticket('Printer jams', 'closed'), opened.revision);
     x.copies.wrote(own.uri, own.contents, own.reply.changes);
+    expect(x.copies.caughtUpTo(named)).toBe(opened.revision);
     await vi.waitFor(() => expect(x.log).toContainEqual({ kind: 'event', eventId: own.reply.revision, outcome: 'skipped' }), NETWORK_WAIT);
+    expect(x.copies.caughtUpTo(named)).toBe(own.reply.revision);
     // X's own deletion, whose tombstone it holds.
     const { changes } = (await x.party.client.request('resources/delete', { uri: own.uri, ifMatch: own.reply.revision })) as unknown as { changes: ChangeSetEntry[] };
     x.copies.wrote(own.uri, undefined, changes);
     await vi.waitFor(() => expect(x.log).toContainEqual({ kind: 'event', eventId: changes[0].revision, outcome: 'skipped' }), NETWORK_WAIT);
     expect(catchUps()).toBe(before);
+    expect(x.copies.caughtUpTo(named)).toBe(await latest());
 
     // X's two writes in a row, with their events held until both replies are in, so the first
     // event's entry is older than the copy the second made.
@@ -86,6 +91,33 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(x.copies.copy(`${lane.root}/tickets/ticket-4`)?.revision).toBe(four.revision);
   });
 
+  it("R9, R11: syncs on its own write's event when another's earlier event has not reached it, though it holds its own change, and makes no call when that one arrives late", async () => {
+    const lane = newLane(layout);
+    const page = await watch(lane, 'A');
+    const x = await gatedClient(lane, 'x');
+    const three = await create(lane, 'tickets/ticket-3', ticket('Printer jams'));
+    const named = namedAt(lane, 'tickets/{id}');
+    await x.copies.watch(named);
+    x.forward(false);
+    // Another's write, whose event X does not take yet. A's POST of it is answered before X
+    // writes, so A sends X's own event on its own, not merged into this one.
+    const nine = await create(lane, 'tickets/ticket-9', ticket('Paper out'));
+    await vi.waitFor(() => expect(page.reports().filter((report) => report.kind === 'attempt' && report.outcome === '200')).toHaveLength(1), NETWORK_WAIT);
+    const own = await updateAs(x.party, lane, 'tickets/ticket-3', ticket('Printer jams', 'closed'), three.revision);
+    x.copies.wrote(own.uri, own.contents, own.reply.changes);
+    await vi.waitFor(() => expect(x.held).toHaveLength(2), NETWORK_WAIT);
+    const [late, mine] = x.held;
+    expect([late.eventId, mine.eventId, mine.data.previousMoment]).toEqual([nine.revision, own.reply.revision, nine.revision]);
+    const sent = x.syncs().length;
+    await x.copies.event(mine);
+    expect(x.syncs().slice(sent)).toEqual([expect.objectContaining({ from: three.revision })]);
+    expect(x.copies.copy(`${lane.root}/tickets/ticket-9`)?.revision).toBe(nine.revision);
+    expect(x.copies.caughtUpTo(named)).toBe(own.reply.revision);
+    await x.copies.event(late);
+    expect(x.syncs()).toHaveLength(sent + 1);
+    expect(x.copies.caughtUpTo(named)).toBe(own.reply.revision);
+  });
+
   it('R15: keeps the tombstone a catch-up brought over the reply to its own earlier write, which arrives late', async () => {
     const lane = newLane(layout);
     const x = await gatedClient(lane, 'x');
@@ -108,10 +140,10 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const lane = newLane(layout);
     const x = await gatedClient(lane, 'x');
     await x.copies.watch(namedAt(lane, 'tickets/{id}'));
-    const reply = x.gate.hold('resources/collection/catchup', 'reply');
+    const reply = x.gate.hold(SYNC, 'reply');
     const one = await create(lane, 'tickets/ticket-1', ticket('One'));
     await reply.reached;
-    const catchUps = () => x.gate.requests.filter(({ method }) => method === 'resources/collection/catchup');
+    const catchUps = () => x.syncs();
     const sentBefore = catchUps().length;
     const two = await create(lane, 'tickets/ticket-2', ticket('Two'));
     // ticket-2's event has reached the client, and no second catch-up has gone out.
@@ -121,7 +153,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     reply.release();
     await vi.waitFor(() => expect(x.copies.copy(`${lane.root}/tickets/ticket-2`)?.revision).toBe(two.revision), NETWORK_WAIT);
     expect(x.copies.copy(`${lane.root}/tickets/ticket-1`)?.revision).toBe(one.revision);
-    expect(catchUps()[sentBefore].params.from).toBe(one.revision);
+    expect(catchUps()[sentBefore].from).toBe(one.revision);
   });
 
   it('R19: reads a resource whose patch starts from a revision its copy is not at, and stays caught up to its from when that read fails', async () => {
@@ -167,8 +199,12 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(revisionOf('tickets/ticket-1')).toBe(one.revision);
 
     const two = await create(lane, 'tickets/ticket-2', ticket('Refreshed'));
+    const sent = x.syncs().length;
     await x.copies.refresh(named);
     expect(revisionOf('tickets/ticket-2')).toBe(two.revision);
+    // The refresh is one sync, from where X was, with its delivery.
+    expect(x.syncs().slice(sent)).toEqual([expect.objectContaining({ from: one.revision, delivery: expect.objectContaining({ url: x.listener.hookUrl }) })]);
+    expect(x.gate.sent).not.toContain('events/subscribe');
 
     // B's socket closes and A's retries for the change run out, so only the catch-up that
     // reconnecting brings can carry the change.
@@ -191,7 +227,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(gapped.log).toContainEqual({ kind: 'trigger', trigger: 'gap', named });
   });
 
-  it('R21, R23: starts over on momentExpired after a Wipe, and drops every copy', async () => {
+  it('R21, R23: starts over on momentExpired after a Wipe with a first read that carries its delivery, drops every copy, and hears of the next change', async () => {
     const lane = newLane(layout);
     const page = await watch(lane, 'A');
     const x = await gatedClient(lane, 'x');
@@ -203,6 +239,11 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     await x.copies.trigger('started');
     expect(x.log).toContainEqual({ kind: 'started over', named, reason: 'momentExpired' });
     expect(x.copies.copies().size).toBe(0);
+    // The Wipe forgot X's subscription, and the first read made it again.
+    expect(x.syncs().at(-1)).toMatchObject({ delivery: { url: x.listener.hookUrl } });
+    expect(x.syncs().at(-1)).not.toHaveProperty('from');
+    const after = await create(lane, 'tickets/ticket-4', ticket('After the Wipe'));
+    await vi.waitFor(() => expect(x.copies.copy(`${lane.root}/tickets/ticket-4`)?.revision).toBe(after.revision), NETWORK_WAIT);
   });
 
   it("R23: on starting over, keeps a copy it wrote after the last catch-up's nextFrom, drops an unnamed one at or before it, and keeps another collection's", async () => {
@@ -219,10 +260,10 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     // The Wipe ended X's token, so it signs in again now, or its first catch-up would meet a 401
     // and go twice, and the holds below would take the wrong one.
     await x.party.client.request('resources/list');
-    // The first catch-up meets momentExpired, and the start-over's catch-up after its read is
-    // held at its reply while X writes a new ticket.
-    const expired = x.gate.hold('resources/collection/catchup', 'reply');
-    const last = x.gate.hold('resources/collection/catchup', 'reply');
+    // The first sync meets momentExpired, and the start-over's first read is held at its reply,
+    // which A has already built, while X writes a new ticket.
+    const expired = x.gate.hold(SYNC, 'reply');
+    const last = x.gate.hold(SYNC, 'reply');
     const starting = x.copies.trigger('started', tickets);
     await expired.reached;
     expired.release();
@@ -240,7 +281,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
 });
 
 describe('on the shared layout alone', () => {
-  it('R9: takes its own write from the reply, leaves the note it did not send, stays caught up, and gets the note from the catch-up', async () => {
+  it('R9: takes its own write from the reply, leaves the note it did not send, stays caught up, and gets the note from the sync its event brings', async () => {
     const lane = newLane('shared');
     const x = await gatedClient(lane, 'x');
     const note = await create(lane, 'notes/ticket-3', { title: 'Call the vendor' });
@@ -258,6 +299,26 @@ describe('on the shared layout alone', () => {
     await x.copies.event(x.held[0]);
     expect(x.copies.copy(`${lane.root}/notes/ticket-3`)?.revision).toBe(own.reply.revision);
     expect(JSON.parse((x.copies.copy(`${lane.root}/notes/ticket-3`)!.contents as { text: string }).text)).toEqual({ title: 'Call the vendor', done: true });
+  });
+
+  it("R11: a note's change opens no gap for a client watching tickets, so its own ticket write still moves it to A's latest moment with no call", async () => {
+    const lane = newLane('shared');
+    const y = await gatedClient(lane, 'y');
+    const three = await create(lane, 'tickets/ticket-3', ticket('Printer jams'));
+    const named = namedAt(lane, 'tickets/{id}');
+    await y.copies.watch(named);
+    const note = await create(lane, 'notes/plan', { title: 'Plan' });
+    // Y syncs once after the note, so it is caught up past the moment its next event names.
+    await y.copies.trigger('started');
+    expect(y.copies.caughtUpTo(named)).toBe(note.revision);
+    const sent = y.syncs().length;
+    const own = await updateAs(y.party, lane, 'tickets/ticket-3', ticket('Printer jams', 'closed'), three.revision);
+    y.copies.wrote(own.uri, own.contents, own.reply.changes);
+    await vi.waitFor(() => expect(y.log).toContainEqual({ kind: 'event', eventId: own.reply.revision, outcome: 'skipped' }), NETWORK_WAIT);
+    expect(y.listener.deliveries().at(-1)!.body.data).toMatchObject({ previousMoment: three.revision });
+    expect(y.syncs()).toHaveLength(sent);
+    expect(y.copies.caughtUpTo(named)).toBe(own.reply.revision);
+    expect(y.copies.caughtUpTo(named)).toBe((await timelines(lane)).work.latest);
   });
 
   it('R8: is caught up on tickets/{id} to at least each nextFrom it gets for {type}/{id}', async () => {
