@@ -1,6 +1,6 @@
 # A demo page that runs the simple happy path live on the Worker
 
-**Status:** The page's happy path moved to four steps on one `resources/collection/sync` call on 2026-11-11, as `tasks/sync-method.md` § *Build notes* records. Everything below describes the six-step page as first built. Built on 2026-11-04 as a first version for Larry to try, deployed at [resource-webhooks-on-events.transformation.workers.dev](https://resource-webhooks-on-events.transformation.workers.dev/). The sections down to § *Open questions* are the plan it was built to, without phases, since Larry chose to iterate on the running page instead, and § *Build notes* says where the build differs. It gates the short video Larry told #tasks-events-wg he hopes to post before the working group's meeting on Friday 2026-11-06.
+**Status:** The page's happy path moved to four steps on one `resources/collection/sync` call on 2026-11-11, as `tasks/archive/sync-method.md` § *Build notes* records. Everything below describes the six-step page as first built. Built on 2026-11-04 as a first version for Larry to try, deployed at [resource-webhooks-on-events.transformation.workers.dev](https://resource-webhooks-on-events.transformation.workers.dev/). The sections down to § *Open questions* are the plan it was built to, without phases, since Larry chose to iterate on the running page instead, and § *Build notes* says where the build differs. It gates the short video Larry told #tasks-events-wg he hopes to post before the working group's meeting on Friday 2026-11-06.
 
 ## Objective
 
