@@ -51,102 +51,6 @@
             ],
             "type": "object"
         },
-        "CatchUpCollectionRequest": {
-            "description": "Brings every change to a collection after `from`, up to `nextFrom`, and stores nothing (R13).",
-            "properties": {
-                "id": {
-                    "$ref": "#/$defs/RequestId"
-                },
-                "jsonrpc": {
-                    "const": "2.0",
-                    "type": "string"
-                },
-                "method": {
-                    "const": "resources/collection/catchup",
-                    "type": "string"
-                },
-                "params": {
-                    "$ref": "#/$defs/CatchUpCollectionRequestParams"
-                }
-            },
-            "required": [
-                "id",
-                "jsonrpc",
-                "method",
-                "params"
-            ],
-            "type": "object"
-        },
-        "CatchUpCollectionRequestParams": {
-            "properties": {
-                "_meta": {
-                    "$ref": "#/$defs/RequestMetaObject"
-                },
-                "from": {
-                    "description": "The moment the client is caught up to.",
-                    "type": "string"
-                },
-                "patchMimeTypes": {
-                    "description": "The patch formats the client applies, by media type (R19).",
-                    "items": {
-                        "type": "string"
-                    },
-                    "type": "array"
-                },
-                "uri": {
-                    "description": "A uri, a collection of one.",
-                    "format": "uri",
-                    "type": "string"
-                },
-                "uriTemplate": {
-                    "description": "A uriTemplate the server lists, or one a template it lists covers (R24).",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "_meta",
-                "from"
-            ],
-            "type": "object"
-        },
-        "CatchUpCollectionResult": {
-            "properties": {
-                "_meta": {
-                    "$ref": "#/$defs/ResultMetaObject",
-                    "description": "Extends {@link MetaObject} with additional result-specific fields. All key naming rules from `MetaObject` apply."
-                },
-                "changes": {
-                    "items": {
-                        "$ref": "#/$defs/CollectionChange"
-                    },
-                    "type": "array"
-                },
-                "hasMore": {
-                    "description": "Whether the catch-up stopped short of the timeline's latest moment (R14).",
-                    "type": "boolean"
-                },
-                "nextFrom": {
-                    "description": "The `from` of the client's next catch-up.",
-                    "type": "string"
-                },
-                "nextPollMs": {
-                    "description": "How long a client that polls waits before its next catch-up, in milliseconds (D12).",
-                    "type": "integer"
-                },
-                "resultType": {
-                    "description": "Indicates the type of the result, which allows the client to determine\nhow to parse the result object.\n\nServers implementing this protocol version MUST include this field.\nFor backward compatibility, when a client receives a result from a\nserver implementing an earlier protocol version (which does not include\n`resultType`), the client MUST treat the absent field as `\"complete\"`.",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "changes",
-                "hasMore",
-                "nextFrom",
-                "nextPollMs",
-                "resultType"
-            ],
-            "type": "object"
-        },
         "ChangeEffect": {
             "description": "What a change did to one resource.",
             "enum": [
@@ -234,7 +138,7 @@
             "type": "object"
         },
         "CollectionChange": {
-            "description": "One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with\ncontents added (R19). Any change but a deletion carries `contents`, or a `patch` from the\ncontents at `previousRevision` in a format the catch-up listed.",
+            "description": "One resource's change from `from` to a catch-up's `nextFrom`, or one resource of a first read,\nas a `created` entry: a change-set entry with contents added (R19, R22). Any change but a deletion carries `contents`, or a `patch` from the\ncontents at `previousRevision` in a format the catch-up listed.",
             "properties": {
                 "contents": {
                     "anyOf": [
@@ -568,111 +472,6 @@
             },
             "required": [
                 "text"
-            ],
-            "type": "object"
-        },
-        "ReadCollectionRequest": {
-            "description": "Reads every resource in a collection, a page at a time, and the moment to catch up from after (R22).",
-            "properties": {
-                "id": {
-                    "$ref": "#/$defs/RequestId"
-                },
-                "jsonrpc": {
-                    "const": "2.0",
-                    "type": "string"
-                },
-                "method": {
-                    "const": "resources/collection/read",
-                    "type": "string"
-                },
-                "params": {
-                    "$ref": "#/$defs/ReadCollectionRequestParams"
-                }
-            },
-            "required": [
-                "id",
-                "jsonrpc",
-                "method",
-                "params"
-            ],
-            "type": "object"
-        },
-        "ReadCollectionRequestParams": {
-            "properties": {
-                "_meta": {
-                    "$ref": "#/$defs/RequestMetaObject"
-                },
-                "cursor": {
-                    "description": "The `nextCursor` of the read's previous page.",
-                    "type": "string"
-                },
-                "uri": {
-                    "description": "A uri, a collection of one.",
-                    "format": "uri",
-                    "type": "string"
-                },
-                "uriTemplate": {
-                    "description": "A uriTemplate the server lists, or one a template it lists covers (R24).",
-                    "type": "string"
-                }
-            },
-            "required": [
-                "_meta"
-            ],
-            "type": "object"
-        },
-        "ReadCollectionResult": {
-            "properties": {
-                "_meta": {
-                    "$ref": "#/$defs/ResultMetaObject",
-                    "description": "Extends {@link MetaObject} with additional result-specific fields. All key naming rules from `MetaObject` apply."
-                },
-                "cacheScope": {
-                    "description": "Indicates the intended scope of the cached response, analogous to HTTP\n`Cache-Control: public` vs `Cache-Control: private`.\n\n- `\"public\"`: The response does not contain user-specific data. Any\n  client or intermediary (e.g., shared gateway, caching proxy) MAY cache\n  the response and serve it across authorization contexts.\n- `\"private\"`: The response MAY be cached and reused only within the\n  same authorization context. Caches MUST NOT be shared across\n  authorization contexts (e.g., a different access token requires a\n  different cache).",
-                    "enum": [
-                        "private",
-                        "public"
-                    ],
-                    "type": "string"
-                },
-                "contents": {
-                    "description": "Each resource in the collection, as `resources/read` returns it, with its revision in `_meta` (R7).",
-                    "items": {
-                        "anyOf": [
-                            {
-                                "$ref": "#/$defs/TextResourceContents"
-                            },
-                            {
-                                "$ref": "#/$defs/BlobResourceContents"
-                            }
-                        ]
-                    },
-                    "type": "array"
-                },
-                "nextCursor": {
-                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
-                    "type": "string"
-                },
-                "nextFrom": {
-                    "description": "The timeline's latest moment when the read began, the same on every page.",
-                    "type": "string"
-                },
-                "resultType": {
-                    "description": "Indicates the type of the result, which allows the client to determine\nhow to parse the result object.\n\nServers implementing this protocol version MUST include this field.\nFor backward compatibility, when a client receives a result from a\nserver implementing an earlier protocol version (which does not include\n`resultType`), the client MUST treat the absent field as `\"complete\"`.",
-                    "type": "string"
-                },
-                "ttlMs": {
-                    "description": "A hint from the server indicating how long (in milliseconds) the\nclient MAY cache this response before re-fetching. Semantics are\nanalogous to HTTP Cache-Control max-age.\n\n- If 0, The response SHOULD be considered immediately stale,\n  The client MAY re-fetch every time the result is needed.\n- If positive, the client SHOULD consider the result fresh for this many\n  milliseconds after receiving the response.",
-                    "minimum": 0,
-                    "type": "integer"
-                }
-            },
-            "required": [
-                "cacheScope",
-                "contents",
-                "nextFrom",
-                "resultType",
-                "ttlMs"
             ],
             "type": "object"
         },
@@ -1099,7 +898,7 @@
             "type": "object"
         },
         "UriSpecification": {
-            "description": "A uri-specification, as a collection read or a catch-up names it: exactly one of `uri` and `uriTemplate`.",
+            "description": "A uri-specification, as a sync names it: exactly one of `uri` and `uriTemplate`.",
             "properties": {
                 "uri": {
                     "description": "A uri, a collection of one.",

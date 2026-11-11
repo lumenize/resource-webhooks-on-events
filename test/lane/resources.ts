@@ -1,10 +1,10 @@
 // Requests to A's tickets and notes and their collections, through the lane's client, shared by
-// the tests of writes, reads and catch-ups. A timeline's latest and oldest moments are read from
+// the tests of writes, first reads and catch-ups, the two kinds of `resources/collection/sync`. A timeline's latest and oldest moments are read from
 // A's storage, below the public API, for tests that check what a method's result can't show.
 import { runInDurableObject } from 'cloudflare:test';
 import { expect } from 'vitest';
 import { McpError } from '../../src/client/mcp-client';
-import type { CatchUpCollectionResult, DeleteResourceResult, ReadCollectionResult, StatResourceResult, WriteResourceResult } from '../../src/extension-types';
+import type { DeleteResourceResult, StatResourceResult, SyncCollectionResult, WriteResourceResult } from '../../src/extension-types';
 import type { Note, Ticket } from '../../src/resource-types';
 import type { Lane } from './lane';
 
@@ -64,23 +64,28 @@ export function named(lane: Lane, specification: string): { uri: string } | { ur
   return specification.includes('{') ? { uriTemplate: full } : { uri: full };
 }
 
-export function readCollection(lane: Lane, specification: string, cursor?: string): Promise<ReadCollectionResult> {
-  return lane.client.request('resources/collection/read', { ...named(lane, specification), ...(cursor === undefined ? {} : { cursor }) });
+/** The one method a collection is read and caught up through. */
+export const SYNC = 'resources/collection/sync';
+
+/** One page of a first read: a sync that names no `from`. */
+export function firstRead(lane: Lane, specification: string, cursor?: string): Promise<SyncCollectionResult> {
+  return lane.client.request(SYNC, { ...named(lane, specification), ...(cursor === undefined ? {} : { cursor }) });
 }
 
-/** Every page of a collection read, following each `nextCursor`. */
-export async function readAll(lane: Lane, specification: string): Promise<ReadCollectionResult[]> {
-  const pages = [await readCollection(lane, specification)];
-  while (pages.at(-1)!.nextCursor !== undefined) pages.push(await readCollection(lane, specification, pages.at(-1)!.nextCursor));
+/** Every page of a first read, following each `nextCursor`. */
+export async function firstReadAll(lane: Lane, specification: string): Promise<SyncCollectionResult[]> {
+  const pages = [await firstRead(lane, specification)];
+  while (pages.at(-1)!.nextCursor !== undefined) pages.push(await firstRead(lane, specification, pages.at(-1)!.nextCursor));
   return pages;
 }
 
-export function catchUp(lane: Lane, specification: string, from: string, extra: Record<string, unknown> = {}): Promise<CatchUpCollectionResult> {
-  return lane.client.request('resources/collection/catchup', { ...named(lane, specification), from, ...extra });
+/** A catch-up: a sync that names a `from`. */
+export function catchUp(lane: Lane, specification: string, from: string, extra: Record<string, unknown> = {}): Promise<SyncCollectionResult> {
+  return lane.client.request(SYNC, { ...named(lane, specification), from, ...extra });
 }
 
 /** Every catch-up of a run that has `hasMore` true, from `from` until it is false, as R14's client makes them. */
-export async function catchUpAll(lane: Lane, specification: string, from: string, extra: Record<string, unknown> = {}): Promise<CatchUpCollectionResult[]> {
+export async function catchUpAll(lane: Lane, specification: string, from: string, extra: Record<string, unknown> = {}): Promise<SyncCollectionResult[]> {
   const results = [await catchUp(lane, specification, from, extra)];
   while (results.at(-1)!.hasMore) results.push(await catchUp(lane, specification, results.at(-1)!.nextFrom, extra));
   return results;

@@ -277,6 +277,26 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
 
 **Close-out notes:** § *Tested, and not yet tested* still describes three calls, and waits for phase 5's count.
 
+### Phase 5, built 2026-11-11
+
+**For the human:**
+
+- **`npm run deployed` has not run,** since it deploys, which waits for your word. The proposal's § *Tested, and not yet tested* now describes the deployed tier's run in the new flow, so that sentence is unproven until it does. Run it, and `npm run demo:deploy`, before the proposal is pushed.
+- **The proposal's test count reads 499,** the number the final `npm test` printed on this tree.
+- **`Collections` no longer has a public `read` or `catchUp`.** `sync` is its one entry, over two private halves, and `requireSyncable` checks a `from` once for both.
+- **The tests keep the words "first read" and "catch-up"** for the two kinds of sync, as the proposal does. `test/lane/resources.ts` offers `firstRead`, `firstReadAll`, `catchUp` and `catchUpAll`, each a sync.
+
+**Retro notes:**
+
+- Three mutations covered what this phase added or changed: a handler left in the table, patch formats ignored, and a first read that claims a `ttlMs`. Each turned its intended test red.
+- Both conformance runs pass against their baselines, the server's and the client's.
+
+**Close-out notes:**
+
+- The README's example, the repo's `CLAUDE.md` opening and `tasks/demo-page.md`'s status line now describe one method.
+- `grep -rn -i 'collection/read\|collection/catchup\|ReadCollection\|CatchUpCollection\|two methods' src scripts demo README.md CLAUDE.md` prints nothing outside `src/vendor`, and in `test/` the two old names appear only in the `MethodNotFound` test.
+- The row in `tasks/backlog.md` for the SDK reference implementation still speaks of `on_subscribe` and the catch-up. That file holds your uncommitted edit, so the row is left for you.
+
 ## Non-goals
 
 - **The video itself.** Its script, voiceover and capture are worked on outside this repo, once phase 3's page runs.

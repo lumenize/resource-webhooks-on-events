@@ -1,6 +1,6 @@
 // A's role as an MCP server of 2026-07-28: its core methods, its tickets and notes as resources,
-// which the Filesystems strawman's four methods write onto its timelines, the extension's two
-// methods and its event over SEP-3415's Events, and the resources, templates and tools a host
+// which the Filesystems strawman's four methods write onto its timelines, the extension's one
+// method and its event over SEP-3415's Events, and the resources, templates and tools a host
 // adds, as the conformance suite's fixtures. It takes a message the transport has already read and
 // checked, with the principal the edge verified, and from its host `sql`, how to run a
 // transaction, how to send a webhook and how to keep a promise alive, so a Lumenize node can
@@ -8,8 +8,6 @@
 import { EVENTS_EXTENSION, type EventsSubscribeRequestParams, type EventsUnsubscribeRequestParams } from '../events-types';
 import {
   RESOURCE_EVENTS_EXTENSION,
-  type CatchUpCollectionRequestParams,
-  type ReadCollectionRequestParams,
   type SyncCollectionRequestParams,
   type SyncCollectionResult,
   NOT_SUPPORTED,
@@ -89,7 +87,7 @@ export interface ServerRoleOptions {
   /** Which timeline each of A's listed uri-specifications names, one of LAYOUTS. */
   map: TimelineMap;
   cutoffWindowMs: number;
-  /** How far one page of a collection read, or one catch-up, goes. */
+  /** How far one page of a first read, or one catch-up, goes. */
   limits: CollectionLimits;
   extras?: ServerExtras;
   /** Sends one webhook POST, without following redirects. */
@@ -195,8 +193,6 @@ export class ServerRole {
       ['resources/create', (params) => this.#create(params as unknown as CreateResourceRequestParams)],
       ['resources/update', (params) => this.#update(params as unknown as UpdateResourceRequestParams)],
       ['resources/delete', (params) => this.#delete(params as unknown as DeleteResourceRequestParams)],
-      ['resources/collection/read', (params) => this.#collections.read(params as unknown as ReadCollectionRequestParams)],
-      ['resources/collection/catchup', (params) => this.#collections.catchUp(params as unknown as CatchUpCollectionRequestParams)],
       ['resources/collection/sync', (params, principal) => this.#sync(params as unknown as SyncCollectionRequestParams, principal)],
       ['events/list', (params) => (requireNoCursor(params), this.#events.list())],
       ['events/subscribe', (params, principal) => this.#events.subscribe(params as unknown as EventsSubscribeRequestParams, principal)],

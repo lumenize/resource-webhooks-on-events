@@ -57,8 +57,6 @@ const NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ['events/unsubscribe', ['name']],
   ['events/poll', ['name']],
   ['events/stream', ['name']],
-  ['resources/collection/read', ['uri', 'uriTemplate']],
-  ['resources/collection/catchup', ['uri', 'uriTemplate']],
   ['resources/collection/sync', ['uri', 'uriTemplate']],
 ]);
 
@@ -67,8 +65,6 @@ const RESOURCE_EVENTS = 'io.modelcontextprotocol/resource-events';
 
 // The extension each of these methods belongs to, which the server must have declared.
 const EXTENSION_OF: ReadonlyMap<string, string> = new Map([
-  ['resources/collection/read', RESOURCE_EVENTS],
-  ['resources/collection/catchup', RESOURCE_EVENTS],
   ['resources/collection/sync', RESOURCE_EVENTS],
   ['events/list', EVENTS],
   ['events/subscribe', EVENTS],

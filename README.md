@@ -1,6 +1,6 @@
 # Resource webhooks on Events
 
-A working prototype of an MCP extension that lets a client keep copies of resources current. The server records each change to its resources at a moment on a timeline, a string that sorts after every moment before it, such as `"108"`. For each change, it POSTs an event, `mcp.resource.collection.updated`, through the webhook delivery of [SEP-3415](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415), Events. The event names each changed resource and its new revision, and carries none of its contents, so a lost, repeated or late one does no harm. A client that lacks a revision catches up on the whole collection with one call, `resources/collection/catchup`, from the moment it is caught up to.
+A working prototype of an MCP extension that lets a client keep copies of resources current. The server records each change to its resources at a moment on a timeline, a string that sorts after every moment before it, such as `"108"`. For each change, it POSTs an event, `mcp.resource.collection.updated`, through the webhook delivery of [SEP-3415](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/3415), Events. The event names each changed resource and its new revision, and the moment of the event before it, and carries none of its contents, so a lost, repeated or late one does no harm. A client keeps a collection with one method, `resources/collection/sync`: its first sync reads every resource and, given a `delivery`, subscribes, and a later one brings every change after the moment the client is caught up to.
 
 The extension is drafted as a proposal to MCP's Tasks and Events working group, [Resource Events](https://github.com/lumenize/experimental-ext-triggers-events/blob/resource-webhooks-on-events/proposals/XXXX-resource-events.md). Writes use the Filesystems working group's strawman of resource operations, with each resource's moment as its revision. The proposal's § *Reference Implementation* says what this prototype has tested and what it hasn't.
 
@@ -8,20 +8,20 @@ This is the second flavor of the work. The first, [resource-webhooks-standalone]
 
 ## An example
 
-Client X holds ticket-3 at revision `"101"`, and is caught up to `"107"` on `tickets/{id}`. Client Y closes the ticket, at `"108"`. A POSTs the event to each subscription's webhook URL, signed with [Standard Webhooks](https://www.standardwebhooks.com/) headers, with the subscription named in `X-MCP-Subscription-Id`:
+Clients X and Y each started with one sync of `tickets/{id}` that carried a `delivery`, so each holds ticket-3 at revision `"101"`, is subscribed, and is caught up to `"107"`. Y closes the ticket, at `"108"`. A POSTs the event to each subscription's webhook URL, signed with [Standard Webhooks](https://www.standardwebhooks.com/) headers, with the subscription named in `X-MCP-Subscription-Id`:
 
 ```jsonc
 {"eventId": "108", "name": "mcp.resource.collection.updated",
  "timestamp": "2026-11-03T16:00:00.000Z",
- "data": {"uriTemplate": "tickets/{id}", "changes": [
+ "data": {"uriTemplate": "tickets/{id}", "previousMoment": "107", "changes": [
    {"uri": "tickets/ticket-3", "effect": "updated",
     "previousRevision": "101", "revision": "108"}]}}
 ```
 
-Y made the change, so it already holds ticket-3 at `"108"`, and skips the event. X doesn't, so it catches up from `"107"`, and gets a merge patch from the revision it holds:
+Y made the change, so it already holds ticket-3 at `"108"`. It is caught up to `"107"`, the event's `previousMoment`, so it has missed nothing, makes no call, and is caught up to `"108"`. X lacks the change, so it syncs from `"107"`, and gets a merge patch from the revision it holds:
 
 ```jsonc
-{"method": "resources/collection/catchup", "params": {"uriTemplate": "tickets/{id}",
+{"method": "resources/collection/sync", "params": {"uriTemplate": "tickets/{id}",
   "from": "107", "patchMimeTypes": ["application/merge-patch+json"]}}
 {"changes": [
   {"uri": "tickets/ticket-3", "effect": "updated",
@@ -39,9 +39,9 @@ One Cloudflare Worker hosts the server and the gateway, each a Durable Object:
 
 | Part | Where | What it does |
 |---|---|---|
-| A, the server | `/server/A`, in `src/server.ts` and `src/server-role/` | serves tickets and notes as MCP resources, with the strawman's four methods and zero-padded counters for moments; serves `resources/collection/read` and `resources/collection/catchup`; takes SEP-3415's `events/subscribe`, and delivers each event with retries held to SEP-3415's bounds; runs its own authorization server, in `src/auth/`, where clients register by Client ID Metadata Document |
+| A, the server | `/server/A`, in `src/server.ts` and `src/server-role/` | serves tickets and notes as MCP resources, with the strawman's four methods and zero-padded counters for moments; serves `resources/collection/sync`, which makes an SEP-3415 subscription when it carries a `delivery`, as `events/subscribe` also does; delivers each event with retries held to SEP-3415's bounds; runs its own authorization server, in `src/auth/`, where clients register by Client ID Metadata Document |
 | B, the gateway | `/gateway/B`, in `src/gateway.ts` and `src/gateway-role/` | a gateway in SEP-3415's forward-proxy deployment: takes each client's webhooks, checks each signature, and passes the event down that client's WebSocket |
-| the client | `src/client/` | `mcp-client.ts` speaks MCP to A, and `copies.ts` keeps copies by the client's rules: it skips an event whose revisions it holds, catches up, applies patches, and starts over when told to |
+| the client | `src/client/` | `mcp-client.ts` speaks MCP to A, and `copies.ts` keeps copies by the client's rules: it syncs, moves forward with no call on an event whose revisions it holds, applies patches, and starts over when told to |
 | the demo page | `demo/`, served by the Worker | shows A, B and two clients, X and Y, taking the proposal's simple happy path one step at a time, with the last message over each wire on hover; X and Y run `src/client/` in the page |
 
 The Worker's edge, in `src/edge.ts`, refuses requests from any origin but its own, checks A's tokens, and routes only the paths it lists.

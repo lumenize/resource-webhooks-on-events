@@ -4,7 +4,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { LAYOUTS, newLane } from '../lane/lane';
-import { catchUp, create, readAll, remove, timelines, update } from '../lane/resources';
+import { catchUp, create, firstReadAll, remove, timelines, update } from '../lane/resources';
 
 const ids = (count: number) => Array.from({ length: count }, (_, i) => `ticket-${i + 1}`);
 
@@ -18,9 +18,9 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       const { revision } = await create(lane, `tickets/${id}`, { title: id, status: 'open' });
       if (!['ticket-1', 'ticket-4', 'ticket-7'].includes(id)) await remove(lane, `tickets/${id}`, revision);
     }
-    const pages = await readAll(lane, 'tickets/{id}');
-    expect(pages.map(({ contents }) => contents.length)).toEqual([1, 1, 1]);
-    expect(pages.flatMap(({ contents }) => contents.map(({ uri }) => uri.slice(lane.root.length + 9)))).toEqual(['ticket-1', 'ticket-4', 'ticket-7']);
+    const pages = await firstReadAll(lane, 'tickets/{id}');
+    expect(pages.map(({ changes }) => changes.length)).toEqual([1, 1, 1]);
+    expect(pages.flatMap(({ changes }) => changes.map(({ uri }) => uri.slice(lane.root.length + 9)))).toEqual(['ticket-1', 'ticket-4', 'ticket-7']);
   });
 
   it('R26: stops a page once its contents pass PAGE_BYTES, and brings every ticket exactly once', async () => {
@@ -29,10 +29,10 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     // Each ticket is 70 bytes, so a page passes 100 bytes at its second.
     const json = (title: string) => JSON.stringify({ title, status: 'open' });
     for (const id of ids(3)) await create(lane, `tickets/${id}`, { title: `${id} ${'x'.repeat(70 - json(`${id} `).length)}`, status: 'open' });
-    const pages = await readAll(lane, 'tickets/{id}');
-    expect(pages[0].contents.map((entry) => ('text' in entry ? entry.text.length : 0))).toEqual([70, 70]);
-    expect(pages.flatMap(({ contents }) => contents.map(({ uri }) => uri.slice(lane.root.length + 9))).sort()).toEqual(ids(3).sort());
-    expect(pages.map(({ contents }) => contents.length)).toEqual([2, 1]);
+    const pages = await firstReadAll(lane, 'tickets/{id}');
+    expect(pages[0].changes.map(({ contents }) => (contents && 'text' in contents ? contents.text.length : 0))).toEqual([70, 70]);
+    expect(pages.flatMap(({ changes }) => changes.map(({ uri }) => uri.slice(lane.root.length + 9))).sort()).toEqual(ids(3).sort());
+    expect(pages.map(({ changes }) => changes.length)).toEqual([2, 1]);
   });
 });
 

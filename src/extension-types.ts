@@ -1,6 +1,6 @@
 // The extension's types, written in the style of the spec's schema.ts: the Filesystems strawman's
 // resource operations, which A serves, as this extension amends them, since every change-set
-// entry carries `revision`, a deletion's included (R7), and the extension's own two methods and
+// entry carries `revision`, a deletion's included (R7), and the extension's own method and
 // event. `npm run generate:schema` writes their JSON Schema to extension-types.schema.json.
 import type { WebhookDelivery, WebhookDeliveryStatus } from './events-types';
 import type {
@@ -19,7 +19,7 @@ import type {
 
 /**
  * The extension's provisional identifier, a key in `capabilities.extensions`, which commits a
- * server to its two methods and to listing its event (R20).
+ * server to its method and to listing its event (R20).
  */
 export const RESOURCE_EVENTS_EXTENSION = 'io.modelcontextprotocol/resource-events';
 
@@ -113,7 +113,7 @@ export interface DeleteResourceResult extends Result {
   changes: ChangeSetEntry[];
 }
 
-/** A uri-specification, as a collection read or a catch-up names it: exactly one of `uri` and `uriTemplate`. */
+/** A uri-specification, as a sync names it: exactly one of `uri` and `uriTemplate`. */
 export interface UriSpecification {
   /**
    * A uri, a collection of one.
@@ -124,43 +124,12 @@ export interface UriSpecification {
   uriTemplate?: string;
 }
 
-export interface ReadCollectionRequestParams extends RequestParams, UriSpecification {
-  /** The `nextCursor` of the read's previous page. */
-  cursor?: Cursor;
-}
-
-/** Reads every resource in a collection, a page at a time, and the moment to catch up from after (R22). */
-export interface ReadCollectionRequest extends JSONRPCRequest {
-  method: 'resources/collection/read';
-  params: ReadCollectionRequestParams;
-}
-
-export interface ReadCollectionResult extends PaginatedResult, CacheableResult {
-  /** Each resource in the collection, as `resources/read` returns it, with its revision in `_meta` (R7). */
-  contents: (TextResourceContents | BlobResourceContents)[];
-  /** The timeline's latest moment when the read began, the same on every page. */
-  nextFrom: string;
-}
-
-export interface CatchUpCollectionRequestParams extends RequestParams, UriSpecification {
-  /** The moment the client is caught up to. */
-  from: string;
-  /** The patch formats the client applies, by media type (R19). */
-  patchMimeTypes?: string[];
-}
-
-/** Brings every change to a collection after `from`, up to `nextFrom`, and stores nothing (R13). */
-export interface CatchUpCollectionRequest extends JSONRPCRequest {
-  method: 'resources/collection/catchup';
-  params: CatchUpCollectionRequestParams;
-}
-
 /** The patch format A sends, RFC 7396's JSON merge patch. */
 export const MERGE_PATCH_MIME_TYPE = 'application/merge-patch+json';
 
 /**
- * One resource's change from `from` to the catch-up's `nextFrom`, a change-set entry with
- * contents added (R19). Any change but a deletion carries `contents`, or a `patch` from the
+ * One resource's change from `from` to a catch-up's `nextFrom`, or one resource of a first read,
+ * as a `created` entry: a change-set entry with contents added (R19, R22). Any change but a deletion carries `contents`, or a `patch` from the
  * contents at `previousRevision` in a format the catch-up listed.
  */
 export interface CollectionChange extends ChangeSetEntry {
@@ -171,16 +140,6 @@ export interface CollectionChange extends ChangeSetEntry {
    * catch-up's `patchMimeTypes`.
    */
   patch?: WriteContents;
-}
-
-export interface CatchUpCollectionResult extends Result {
-  changes: CollectionChange[];
-  /** Whether the catch-up stopped short of the timeline's latest moment (R14). */
-  hasMore: boolean;
-  /** The `from` of the client's next catch-up. */
-  nextFrom: string;
-  /** How long a client that polls waits before its next catch-up, in milliseconds (D12). */
-  nextPollMs: number;
 }
 
 export interface SyncCollectionRequestParams extends PaginatedRequestParams, UriSpecification {

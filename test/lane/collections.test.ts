@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { watch } from '../client/parties';
 import { LAYOUTS, newLane, type Lane } from './lane';
-import { catchUp, create, named, readCollection, refusal, remove, timelines, update } from './resources';
+import { catchUp, create, firstRead, named, refusal, remove, SYNC, timelines, update } from './resources';
 
 const TICKETS = (layout: string) => (layout === 'split' ? 'tickets' : 'work');
 
@@ -49,17 +49,17 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(result.changes.some(({ revision }) => revision === unchanged.revision)).toBe(false);
     expect({ hasMore: result.hasMore, nextFrom: result.nextFrom }).toEqual({ hasMore: false, nextFrom: (await timelines(lane))[TICKETS(layout)].latest });
     // A read brings what exists now, so neither the deleted ticket nor the note.
-    expect((await readCollection(lane, 'tickets/{id}')).contents.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-1`, `${lane.root}/tickets/ticket-3`]);
+    expect((await firstRead(lane, 'tickets/{id}')).changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-1`, `${lane.root}/tickets/ticket-3`]);
   });
 
   it("R13's first sub-bullet: answers a read and a catch-up of a covered uri no resource holds yet with nothing, at the latest moment", async () => {
     const lane = newLane(layout);
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     const latest = (await timelines(lane))[TICKETS(layout)].latest;
-    expect(await readCollection(lane, 'tickets/ticket-99')).toMatchObject({ contents: [], nextFrom: latest });
+    expect(await firstRead(lane, 'tickets/ticket-99')).toMatchObject({ changes: [], hasMore: false, nextFrom: latest });
     expect(await catchUp(lane, 'tickets/ticket-99', latest)).toMatchObject({ changes: [], hasMore: false, nextFrom: latest });
     // And a read of a uri a resource holds is that one resource.
-    expect((await readCollection(lane, 'tickets/ticket-3')).contents.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-3`]);
+    expect((await firstRead(lane, 'tickets/ticket-3')).changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-3`]);
   });
 
   it("R22, R13: a uri's collection holds that resource alone, not one whose path begins with it", async () => {
@@ -68,38 +68,37 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     await create(lane, 'tickets/ticket-30', { title: 'A neighbour', status: 'open' });
     const only = [`${lane.root}/tickets/ticket-3`];
-    expect((await readCollection(lane, 'tickets/ticket-3')).contents.map(({ uri }) => uri)).toEqual(only);
+    expect((await firstRead(lane, 'tickets/ticket-3')).changes.map(({ uri }) => uri)).toEqual(only);
     expect((await catchUp(lane, 'tickets/ticket-3', from)).changes.map(({ uri }) => uri)).toEqual(only);
   });
 
-  it("R13's errors: refuses an uncovered uri with notFound, both or neither named, no from, and names past their bounds, before anything is read", async () => {
+  it("R13's and R22's errors: refuses an uncovered uri with notFound, both or neither named, a from that is no moment, and names past their bounds, before anything is read", async () => {
     const lane = newLane(layout);
     const latest = (await timelines(lane))[TICKETS(layout)].latest;
     // Three segments, which neither {id} nor {type}/{id} matches.
     const uncovered = `${lane.root}/projects/project-1/files`;
-    for (const request of [() => readCollection(lane, 'projects/project-1/files'), () => catchUp(lane, 'projects/project-1/files', latest)]) {
+    for (const request of [() => firstRead(lane, 'projects/project-1/files'), () => catchUp(lane, 'projects/project-1/files', latest)]) {
       expect(await refusal(request())).toEqual({ code: -32602, data: { reason: 'notFound', uri: uncovered } });
     }
     const both = { uri: uncovered, uriTemplate: `${lane.root}/tickets/{id}` };
-    for (const [method, params] of [
-      ['resources/collection/read', both],
-      ['resources/collection/read', {}],
-      ['resources/collection/catchup', { ...both, from: latest }],
-      ['resources/collection/catchup', { uriTemplate: `${lane.root}/tickets/{id}` }],
-      ['resources/collection/read', { uri: `${lane.root}/tickets/${'x'.repeat(2048)}` }],
-      ['resources/collection/read', { uriTemplate: `${lane.root}/tickets/{id}${'x'.repeat(1024)}` }],
-      ['resources/collection/catchup', { uriTemplate: `${lane.root}/tickets/{id}`, from: '107' }],
-    ] as const) {
-      const refused = await refusal(lane.client.request(method, params)).catch((error: unknown) => ({ code: 0, data: String(error) }));
+    for (const params of [
+      both,
+      {},
+      { ...both, from: latest },
+      { uri: `${lane.root}/tickets/${'x'.repeat(2048)}` },
+      { uriTemplate: `${lane.root}/tickets/{id}${'x'.repeat(1024)}` },
+      { uriTemplate: `${lane.root}/tickets/{id}`, from: '107' },
+    ]) {
+      const refused = await refusal(lane.client.request(SYNC, params)).catch((error: unknown) => ({ code: 0, data: String(error) }));
       // Each is refused as invalid, never as notFound, which would mean A had looked something up.
-      expect({ method, params, code: refused.code, notFound: (refused.data as { reason?: string } | undefined)?.reason === 'notFound' }).toEqual({ method, params, code: -32602, notFound: false });
+      expect({ params, code: refused.code, notFound: (refused.data as { reason?: string } | undefined)?.reason === 'notFound' }).toEqual({ params, code: -32602, notFound: false });
     }
     // Each refusal A makes itself names what the request named, as notFound does.
     const longUri = `${lane.root}/tickets/${'x'.repeat(2048)}`;
     const longTemplate = `${lane.root}/tickets/{id}${'x'.repeat(1024)}`;
-    expect((await refusal(lane.client.request('resources/collection/read', both))).data).toEqual(both);
-    expect((await refusal(lane.client.request('resources/collection/read', { uri: longUri }))).data).toEqual({ uri: longUri });
-    expect((await refusal(lane.client.request('resources/collection/read', { uriTemplate: longTemplate }))).data).toEqual({ uriTemplate: longTemplate });
+    expect((await refusal(lane.client.request(SYNC, both))).data).toEqual(both);
+    expect((await refusal(lane.client.request(SYNC, { uri: longUri }))).data).toEqual({ uri: longUri });
+    expect((await refusal(lane.client.request(SYNC, { uriTemplate: longTemplate }))).data).toEqual({ uriTemplate: longTemplate });
   });
 
   it('R13, D23: refuses a request whose Mcp-Name is missing or differs from its uri or uriTemplate, with 400', async () => {
@@ -108,10 +107,10 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const template = `${lane.root}/tickets/{id}`;
     const uri = `${lane.root}/tickets/ticket-3`;
     for (const [method, params, name] of [
-      ['resources/collection/read', { uriTemplate: template }, template],
-      ['resources/collection/catchup', { uriTemplate: template, from: latest }, template],
-      ['resources/collection/read', { uri }, uri],
-      ['resources/collection/catchup', { uri, from: latest }, uri],
+      [SYNC, { uriTemplate: template }, template],
+      [SYNC, { uriTemplate: template, from: latest }, template],
+      [SYNC, { uri }, uri],
+      [SYNC, { uri, from: latest }, uri],
     ] as const) {
       for (const headers of [{}, { 'Mcp-Name': `${lane.root}/notes/{id}` }] as Record<string, string>[]) {
         const response = await post(lane, method, params, headers);
@@ -125,11 +124,11 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const lane = newLane(layout);
     const latest = (await timelines(lane))[TICKETS(layout)].latest;
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
-    expect((await readCollection(lane, 'tickets/ticket-{n}')).contents.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-3`]);
+    expect((await firstRead(lane, 'tickets/ticket-{n}')).changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-3`]);
     expect((await catchUp(lane, 'tickets/ticket-{n}', latest)).changes.map(({ uri }) => uri)).toEqual([`${lane.root}/tickets/ticket-3`]);
     const refused = ['tickets/{+rest}', 'tickets/{id}/{+rest}', 'tickets/ticket-3/x', 'tickets/{id', ...(layout === 'split' ? ['{type}/{id}'] : [])];
     for (const specification of refused) {
-      for (const request of [() => readCollection(lane, specification), () => catchUp(lane, specification, latest)]) {
+      for (const request of [() => firstRead(lane, specification), () => catchUp(lane, specification, latest)]) {
         expect({ specification, ...(await refusal(request())) }).toEqual({ specification, code: -32602, data: { reason: 'notFound', ...named(lane, specification) } });
       }
     }
@@ -177,23 +176,34 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
 });
 
 describe('on the shared layout alone', () => {
-  it("R13, R22: a read's and a catch-up's nextFrom is the timeline's latest, a note's moment, though no ticket entry carries it", async () => {
+  it("R13, R22: a first read's and a catch-up's nextFrom is the timeline's latest, a note's moment, though no ticket entry carries it", async () => {
     const lane = newLane('shared');
     const three = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     const note = await create(lane, 'notes/plan', { title: 'Plan' });
     expect(note.revision > three.revision).toBe(true);
-    const read = await readCollection(lane, 'tickets/{id}');
-    expect(read).toMatchObject({ nextFrom: note.revision, ttlMs: 0, cacheScope: 'public' });
-    expect(read.contents.map(({ _meta }) => _meta?.['io.modelcontextprotocol/resource-revision'])).toEqual([three.revision]);
+    const read = await firstRead(lane, 'tickets/{id}');
+    expect(read).toMatchObject({ nextFrom: note.revision, hasMore: false });
+    // A first read may write a subscription, so it is no CacheableResult (D12).
+    expect(read).not.toHaveProperty('ttlMs');
+    expect(read.changes.map(({ revision, contents }) => [revision, contents?._meta?.['io.modelcontextprotocol/resource-revision']])).toEqual([[three.revision, three.revision]]);
     const caught = await catchUp(lane, 'tickets/{id}', three.revision);
     expect(caught).toEqual({ resultType: 'complete', changes: [], hasMore: false, nextFrom: note.revision, nextPollMs: 30_000, _meta: expect.anything() });
     expect(caught).not.toHaveProperty('ttlMs');
+  });
+
+  it('R20: answers the two methods an earlier draft had, a read and a catch-up of their own, with MethodNotFound', async () => {
+    const lane = newLane('shared');
+    const { latest } = (await timelines(lane)).work;
+    const template = { uriTemplate: `${lane.root}/tickets/{id}` };
+    expect((await refusal(lane.client.request('resources/collection/read', template))).code).toBe(-32601);
+    expect((await refusal(lane.client.request('resources/collection/catchup', { ...template, from: latest }))).code).toBe(-32601);
+    expect((await firstRead(lane, 'tickets/{id}')).resultType).toBe('complete');
   });
 
   it('R24: answers {type}/{id}, which covers tickets and notes, with both', async () => {
     const lane = newLane('shared');
     await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     await create(lane, 'notes/plan', { title: 'Plan' });
-    expect((await readCollection(lane, '{type}/{id}')).contents.map(({ uri }) => uri)).toEqual([`${lane.root}/notes/plan`, `${lane.root}/tickets/ticket-3`]);
+    expect((await firstRead(lane, '{type}/{id}')).changes.map(({ uri }) => uri)).toEqual([`${lane.root}/notes/plan`, `${lane.root}/tickets/ticket-3`]);
   });
 });

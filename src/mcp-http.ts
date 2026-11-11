@@ -28,9 +28,7 @@ const MCP_NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ['events/unsubscribe', ['name']],
   ['events/poll', ['name']],
   ['events/stream', ['name']],
-  // The extension's methods name their collection, as resources/read names its uri (D23).
-  ['resources/collection/read', ['uri', 'uriTemplate']],
-  ['resources/collection/catchup', ['uri', 'uriTemplate']],
+  // The extension's method names its collection, as resources/read names its uri (D23).
   ['resources/collection/sync', ['uri', 'uriTemplate']],
 ]);
 

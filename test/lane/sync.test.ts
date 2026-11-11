@@ -9,7 +9,7 @@ import { newSecret } from '../../src/standard-webhooks';
 import { signedIn, subscribe, watch, type Party } from '../client/parties';
 import { newLane, type Lane } from './lane';
 import { echo, receiver, type Receiver } from './receiver';
-import { catchUp, create, named, refusal, timelines, update } from './resources';
+import { create, named, refusal, timelines, update } from './resources';
 
 const MERGE_PATCH = ['application/merge-patch+json'];
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -68,15 +68,24 @@ describe('a sync with no delivery', () => {
     expect(result.subscription).toBeUndefined();
   });
 
-  it('R13: with a from, answers as a catch-up from it does, and stores nothing', async () => {
+  it('R13: with a from, brings each change after it, a patch where one applies, and stores nothing', async () => {
     const lane = newLane();
     const b = await signedIn(lane, 'b');
     const opened = await create(lane, 'tickets/ticket-3', ticket('Printer jams'));
-    await update(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'closed' }, opened.revision);
-    await create(lane, 'tickets/ticket-7', ticket('Again'));
-    const viaSync = await sync(b, lane, 'tickets/{id}', { from: opened.revision, patchMimeTypes: MERGE_PATCH });
-    expect(viaSync.changes).toHaveLength(2);
-    expect(viaSync).toEqual(await catchUp(lane, 'tickets/{id}', opened.revision, { patchMimeTypes: MERGE_PATCH }));
+    const closed = await update(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'closed' }, opened.revision);
+    const seven = await create(lane, 'tickets/ticket-7', ticket('Again'));
+    const result = await sync(b, lane, 'tickets/{id}', { from: opened.revision, patchMimeTypes: MERGE_PATCH });
+    expect(result).toEqual({
+      resultType: 'complete',
+      changes: [
+        { uri: `${lane.root}/tickets/ticket-3`, effect: 'updated', previousRevision: opened.revision, revision: closed.revision, patch: { mimeType: 'application/merge-patch+json', text: '{"status":"closed"}' } },
+        { uri: `${lane.root}/tickets/ticket-7`, effect: 'created', revision: seven.revision, contents: { uri: `${lane.root}/tickets/ticket-7`, mimeType: 'application/json', text: JSON.stringify(ticket('Again')) } },
+      ],
+      hasMore: false,
+      nextFrom: seven.revision,
+      nextPollMs: 30_000,
+      _meta: expect.anything(),
+    });
     expect(await subscriptionRows(lane)).toBe(0);
   });
 

@@ -1,17 +1,9 @@
-// The extension's two methods: `resources/collection/read`, which reads every resource in a
-// collection a page at a time (R22), and `resources/collection/catchup`, which brings every change
-// to it after a moment and stores nothing (R13, D3). Each names a uri-specification, a uri or a
-// uriTemplate, which a listed one must cover (R24), and reads that one's timeline.
-import type {
-  CatchUpCollectionRequestParams,
-  CatchUpCollectionResult,
-  CollectionChange,
-  ReadCollectionRequestParams,
-  ReadCollectionResult,
-  SyncCollectionRequestParams,
-  SyncCollectionResult,
-  UriSpecification,
-} from '../extension-types';
+// The extension's one method, `resources/collection/sync`. With no `from` it is a first read, of
+// every resource in a collection a page at a time (R22, R26). With one it is a catch-up, which
+// brings every change to the collection after that moment (R13). It names a uri-specification, a
+// uri or a uriTemplate, which a listed one must cover (R24), and reads that one's timeline. It
+// stores nothing here: the subscription a `delivery` asks for is the Events module's to write.
+import type { CollectionChange, SyncCollectionRequestParams, SyncCollectionResult, UriSpecification } from '../extension-types';
 import { MERGE_PATCH_MIME_TYPE, RESOURCE_REVISION_META_KEY } from '../extension-types';
 import { JsonRpcError } from '../json-rpc';
 import type { TextResourceContents } from '../vendor/mcp-spec/2026-07-28/schema';
@@ -20,15 +12,15 @@ import { INVALID_PARAMS } from '../vendor/mcp-spec/2026-07-28/schema';
 import { literalPrefix, templateCovers, templateMatcher } from './uri-templates';
 import { MOMENT_WIDTH, type Row, type TimelineMap, type Timelines } from './version-store';
 
-/** The largest uri a collection read or a catch-up names, in UTF-8 bytes. */
+/** The largest uri a sync names, in UTF-8 bytes. */
 export const MAX_NAMED_URI_BYTES = 2 * 1024;
-/** The largest uriTemplate a collection read or a catch-up names, in UTF-8 bytes. */
+/** The largest uriTemplate a sync names, in UTF-8 bytes. */
 export const MAX_NAMED_TEMPLATE_BYTES = 1024;
-/** How long a client that polls waits between catch-ups, in milliseconds (D12). */
+/** How long a client that polls waits between syncs, in milliseconds (D12). */
 export const NEXT_POLL_MS = 30_000;
 
 /**
- * How far one page of a read, or one catch-up, goes before it stops. A catch-up stops only once
+ * How far one page of a first read, or one catch-up, goes before it stops. A catch-up stops only once
  * a moment is done and every resource it keeps still has its contents there, so it may run past
  * any of the first three (R14, R21). It counts each resource's contents, whether it then sends
  * them or a patch.
@@ -88,27 +80,13 @@ export class Collections {
    */
   sync(params: SyncCollectionRequestParams): SyncCollectionResult {
     this.requireSyncable(params);
-    if (params.from !== undefined) return this.catchUp({ ...params, from: params.from });
-    const page = this.read(params);
-    const changes = page.contents.map((contents): CollectionChange => {
-      const revision = contents._meta![RESOURCE_REVISION_META_KEY] as string;
-      return { uri: contents.uri, effect: 'created', revision, contents };
-    });
-    const paged = params.cursor !== undefined || page.nextCursor !== undefined;
-    return {
-      resultType: 'complete',
-      changes,
-      hasMore: paged,
-      nextFrom: page.nextFrom,
-      nextPollMs: NEXT_POLL_MS,
-      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
-    };
+    return params.from === undefined ? this.#firstRead(params) : this.#catchUp(params, params.from);
   }
 
   /**
    * Refuses a sync that A can refuse before it posts a handshake anywhere: a `cursor` beside a
    * `from` or a `delivery`, a uri-specification no listed one covers, a `from` that is no moment,
-   * and one older than A keeps, which the sync itself checks again.
+   * and one older than A keeps. A sync runs it again as it builds its result.
    */
   requireSyncable(params: SyncCollectionRequestParams): void {
     const coverage = this.#coverage(params);
@@ -129,17 +107,16 @@ export class Collections {
     return this.#options.store.latest(this.#coverage(named).timeline);
   }
 
-  /**
-   * A page of the collection in path order, each resource at its newest, and the timeline's
-   * latest moment when the first page was read, which every page repeats. A page stops at
-   * `pageSize` resources, at `scanLimit` rows scanned, or once its contents pass `pageBytes`.
-   */
-  read(params: ReadCollectionRequestParams): ReadCollectionResult {
+  // A page of the collection in path order, each resource at its newest, as a `created` entry with
+  // its contents, and the timeline's latest moment when the first page was read, which every page
+  // repeats. A page stops at `pageSize` resources, at `scanLimit` rows scanned, or once its
+  // contents pass `pageBytes`. `hasMore` is true on every page of a read that pages (R26).
+  #firstRead(params: SyncCollectionRequestParams): SyncCollectionResult {
     const coverage = this.#coverage(params);
     const { store, limits } = this.#options;
     const position = params.cursor === undefined ? { nextFrom: store.latest(coverage.timeline), after: '' } : this.#position(params.cursor, coverage);
     const rows = store.newestInPathOrder(coverage.timeline, position.after, coverage.prefix, limits.scanLimit);
-    const contents: TextResourceContents[] = [];
+    const changes: CollectionChange[] = [];
     let bytes = 0;
     let after = position.after;
     let more = false;
@@ -148,40 +125,34 @@ export class Collections {
       if (!row.path.startsWith(coverage.prefix)) break;
       after = row.path;
       if (!row.deleted && coverage.covers(row.path)) {
-        contents.push(this.#contents(row));
+        const contents = this.#contents(row);
+        changes.push({ uri: contents.uri, effect: 'created', revision: row.moment, contents });
         bytes += utf8Length(row.contents!);
       }
-      if (contents.length === limits.pageSize || bytes > limits.pageBytes || i === limits.scanLimit - 1) {
+      if (changes.length === limits.pageSize || bytes > limits.pageBytes || i === limits.scanLimit - 1) {
         more = true;
         break;
       }
     }
     return {
       resultType: 'complete',
-      contents,
+      changes,
+      hasMore: params.cursor !== undefined || more,
       nextFrom: position.nextFrom,
+      nextPollMs: NEXT_POLL_MS,
       ...(more ? { nextCursor: cursorOf({ nextFrom: position.nextFrom, after }) } : {}),
-      ttlMs: 0,
-      cacheScope: 'public',
     };
   }
 
-  /**
-   * Every covered resource changed after `from` and at or before the result's `nextFrom`, each as
-   * it stood at `nextFrom`, a deleted one as a tombstone (R13, R19). It stops short once a limit
-   * is reached, at the end of a moment where every resource it brings still has its contents, and
-   * `nextFrom` is then that moment, with `hasMore` true (R14). Otherwise it runs to the latest.
-   */
-  catchUp(params: CatchUpCollectionRequestParams): CatchUpCollectionResult {
+  // Every covered resource changed after `from` and at or before the result's `nextFrom`, each as
+  // it stood at `nextFrom`, a deleted one as a tombstone (R13, R19). It stops short once a limit
+  // is reached, at the end of a moment where every resource it brings still has its contents, and
+  // `nextFrom` is then that moment, with `hasMore` true (R14). Otherwise it runs to the latest.
+  // `requireSyncable` has checked `from`, in the same synchronous step.
+  #catchUp(params: SyncCollectionRequestParams, from: string): SyncCollectionResult {
     const coverage = this.#coverage(params);
-    const { store } = this.#options;
-    const { from } = params;
-    if (!isMoment(from)) throw new JsonRpcError(INVALID_PARAMS, 'from is not a moment of this server', { ...coverage.named, from });
     // The latest moment is read before the resources, in the same synchronous block (R13).
-    const latest = store.latest(coverage.timeline);
-    if (from < store.oldest(coverage.timeline)) {
-      throw new JsonRpcError(INVALID_PARAMS, 'The moment is older than this server keeps', { reason: 'momentExpired', ...coverage.named });
-    }
+    const latest = this.#options.store.latest(coverage.timeline);
     const { rows, stoppedAt } = this.#scan(coverage, from);
     const patches = (params.patchMimeTypes ?? []).includes(MERGE_PATCH_MIME_TYPE);
     const changes = rows.sort((a, b) => (a.moment === b.moment ? (a.path < b.path ? -1 : 1) : a.moment < b.moment ? -1 : 1)).map((row) => this.#change(row, from, patches));
