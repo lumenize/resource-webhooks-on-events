@@ -196,7 +196,7 @@
                     "type": "array"
                 },
                 "previousMoment": {
-                    "description": "The moment of the event before this one on the same subscription, or the timeline's latest\nmoment when the subscription was last written. A client caught up to an earlier moment has\nnot accounted for that event, and syncs (R11).",
+                    "description": "The later of the moment of the event before this one on the same subscription and the\ntimeline's latest moment when the subscription was last written, or, for an event that took\nin undelivered ones, the earliest of theirs. Every change to the collection after it is one\nthis event names. A client caught up to an earlier moment has not accounted for an event, and\nsyncs (R11).",
                     "type": "string"
                 },
                 "uri": {

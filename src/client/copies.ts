@@ -216,9 +216,11 @@ export class Copies {
     }
   }
 
-  // Runs `task` once every task before it for the same uri-specification has ended (R16).
+  // Runs `task` once every task before it for the same uri-specification has ended (R16), unless
+  // a watch that failed meanwhile left it unwatched, so nothing syncs a collection the client
+  // gave up on, with no moment to sync from.
   #run(watched: Watched, task: () => Promise<void>): Promise<void> {
-    const run = watched.tail.then(task);
+    const run = watched.tail.then(() => (this.#watched.get(keyOf(watched.named)) === watched ? task() : undefined));
     watched.tail = run.catch(() => undefined);
     return run;
   }
@@ -248,23 +250,31 @@ export class Copies {
 
   // A first read, with the client's delivery: every page, replacing each copy its pages name,
   // even with an earlier revision, since a first read's entries are not R15's later-only changes
-  // (R22, R23). Every page repeats the first one's `nextFrom`, and a paged read ends with
-  // `hasMore` true, so the syncs after it, from that `nextFrom`, bring what changed while it paged
-  // (R26). Then each copy in the collection that neither the pages nor those syncs named goes, if
-  // it is at or before the last `nextFrom` they applied (R23). The syncs keep their own `from`,
-  // since a wider uri-specification's sync may move this one's forward meanwhile (R8).
+  // (R22, R23). One copy is kept: one from after the read began, later than its `nextFrom`, and at
+  // least as new as the entry, as the client's own write or a wider uri-specification's sync
+  // makes while the reply is on its way. Every page repeats the first one's `nextFrom`, and a
+  // paged read ends with `hasMore` true, so the syncs after it, from that `nextFrom`, bring what
+  // changed while it paged (R26). Each copy in the collection that no page named goes, if it is at
+  // or before that `nextFrom`, before the client counts itself caught up to it, so a sync that
+  // fails afterwards leaves no copy of a resource A no longer has. The same goes, once those syncs
+  // end, for a copy neither they nor the pages named (R23). The syncs keep their own `from`, since
+  // a wider uri-specification's sync may move this one's forward meanwhile.
   async #firstRead(watched: Watched): Promise<SyncCollectionResult> {
     const named = new Set<string>();
     let last = await this.#options.sync(watched.named, { subscribe: true });
-    let from = last.nextFrom;
+    const began = last.nextFrom;
     for (;;) {
       for (const { uri, revision, contents } of last.changes) {
         named.add(uri);
+        const held = this.#copies.get(uri);
+        if (held && held.revision > began && held.revision >= revision) continue;
         if (contents) this.#copies.set(uri, { revision, deleted: false, contents });
       }
       if (last.nextCursor === undefined) break;
       last = await this.#options.sync(watched.named, { cursor: last.nextCursor });
     }
+    this.#dropUnnamed(watched, named, began);
+    let from = began;
     this.#caughtUp(watched, from);
     while (last.hasMore) {
       last = await this.#options.sync(watched.named, { from });
@@ -273,10 +283,16 @@ export class Copies {
       from = last.nextFrom;
       this.#caughtUp(watched, from);
     }
-    for (const [uri, copy] of this.#copies) {
-      if (watched.covers(uri) && !named.has(uri) && copy.revision <= from) this.#copies.delete(uri);
-    }
+    this.#dropUnnamed(watched, named, from);
     return last;
+  }
+
+  // Drops each copy in the collection that a first read and its syncs did not name, if it is at
+  // or before `moment` (R23).
+  #dropUnnamed(watched: Watched, named: ReadonlySet<string>, moment: string): void {
+    for (const [uri, copy] of this.#copies) {
+      if (watched.covers(uri) && !named.has(uri) && copy.revision <= moment) this.#copies.delete(uri);
+    }
   }
 
   // Applies a sync's changes after a `from`, each as R15 and R19 say, and answers whether every one applied.
@@ -317,7 +333,7 @@ export class Copies {
   }
 
   // Moves what the client is caught up to forward only (R15), for the uri-specification and every
-  // watched one it covers (R8).
+  // watched one it covers, since a sync of the wider one brings every change to the narrower.
   #caughtUp(watched: Watched, nextFrom: string): void {
     for (const other of this.#watched.values()) {
       if (other !== watched && !coversSpecification(watched.named, other.named)) continue;

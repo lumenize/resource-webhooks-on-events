@@ -6,11 +6,9 @@ import type { WebhookDelivery, WebhookDeliveryStatus } from './events-types';
 import type {
   BlobResourceContents,
   CacheableResult,
-  Cursor,
   JSONRPCRequest,
   PaginatedRequestParams,
   PaginatedResult,
-  RequestParams,
   Resource,
   ResourceRequestParams,
   Result,
@@ -197,9 +195,11 @@ export interface SyncCollectionResult extends PaginatedResult {
 /** An `mcp.resource.collection.updated` occurrence's `data`: the subscription's uri-specification, and the change (R10). */
 export interface CollectionUpdatedData extends UriSpecification {
   /**
-   * The moment of the event before this one on the same subscription, or the timeline's latest
-   * moment when the subscription was last written. A client caught up to an earlier moment has
-   * not accounted for that event, and syncs (R11).
+   * The later of the moment of the event before this one on the same subscription and the
+   * timeline's latest moment when the subscription was last written, or, for an event that took
+   * in undelivered ones, the earliest of theirs. Every change to the collection after it is one
+   * this event names. A client caught up to an earlier moment has not accounted for an event, and
+   * syncs (R11).
    */
   previousMoment: string;
   /**

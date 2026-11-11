@@ -364,18 +364,21 @@ export class ServerRole {
     return { resultType: 'complete', changes };
   }
 
-  // One write, in one transaction: a refusal anywhere in it leaves every row and every timeline's
-  // latest moment as they were. Its events are sent only once it has committed, so a catch-up
-  // made when one arrives brings the change (R10).
+  // One write, in one transaction: a refusal anywhere in it leaves every row, every timeline's
+  // latest moment and every subscription's last event moment as they were. Its events are staged
+  // in that transaction and sent only once it has committed, so a catch-up made when one arrives
+  // brings the change (R10).
   #write(path: string, steps: (write: Write) => void): WriteResourceResult {
-    const written = this.#transactionSync(() => {
+    const { written, changes, staged } = this.#transactionSync(() => {
       const write = this.store.begin();
       steps(write);
-      return write.finish();
+      const written = write.finish();
+      const changes = written.map((each) => this.#entry(each));
+      const staged = this.#events.stage(written.map(({ row }, i) => ({ path: row.path, entry: changes[i], writtenAt: row.writtenAt })));
+      return { written, changes, staged };
     });
     const target = written.find(({ row }) => row.path === path)!;
-    const changes = written.map((each) => this.#entry(each));
-    this.#events.notify(written.map(({ row }, i) => ({ path: row.path, entry: changes[i], writtenAt: row.writtenAt })));
+    this.#events.send(staged);
     return { resultType: 'complete', resource: this.#resource(target.row), revision: target.row.moment, changes };
   }
 

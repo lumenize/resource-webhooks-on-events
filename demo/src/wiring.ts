@@ -66,7 +66,7 @@ export interface Party {
   sub: string;
 }
 
-/** X or Y: a party with copies, a socket to B, and the gates the page's steps open. */
+/** X or Y: a party with copies, and a socket to B. */
 export interface Watcher extends Party {
   copies: Copies;
   /** The client's hook on B, as `…/gateway/B/hooks/{sub}/{instance}`. */
@@ -285,7 +285,9 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     reconnecting ??= (async () => {
       try {
         await connect();
-        if (subscribed) await copies.trigger('reconnected');
+        // Queued, not awaited: a sync that carries the delivery reconnects from inside its own run,
+        // which this trigger would otherwise wait behind for ever.
+        if (subscribed) void copies.trigger('reconnected').catch(() => undefined);
       } catch {
         if (!closing) setTimeout(() => void reconnect(), 3000);
       } finally {

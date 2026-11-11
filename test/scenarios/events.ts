@@ -59,6 +59,7 @@ export async function eventsScenario(tier: Tier): Promise<void> {
   const reply = await y.party.client.request<WriteResourceResult>('resources/update', { uri: uri('ticket-3'), contents: closed, ifMatch: three.revision });
   y.copies.wrote(uri('ticket-3'), closed, reply.changes);
   expect(y.copies.caughtUpTo(template)).toBe(duplicate.revision);
+  const sentByY = y.gate.sent.length;
 
   // Step 3: A sends each one event naming the change and the moment before it, and none of the
   // ticket's contents.
@@ -79,6 +80,8 @@ export async function eventsScenario(tier: Tier): Promise<void> {
   await y.copies.event(y.held[0]);
   expect(y.log).toContainEqual({ kind: 'event', eventId: reply.revision, outcome: 'skipped' });
   expect(y.copies.caughtUpTo(template)).toBe(reply.revision);
+  // No request of any kind since its write: no sync, and no read of the ticket either.
+  expect(y.gate.sent.slice(sentByY)).toEqual([]);
   expect(y.syncs()).toHaveLength(1);
   await vi.waitFor(() => expect(x.log).toContainEqual({ kind: 'event', eventId: reply.revision, outcome: 'caught up' }), NETWORK_WAIT);
   expect(x.syncs()).toHaveLength(2);

@@ -95,7 +95,7 @@ Missing:
 - **DI5. A refresh is a sync with `from` and `delivery`.** One call renews the subscription and brings what the client missed. The proposal's R12 keeps its triggers, and each now costs one call, where a refresh cost two.
 - **DI6. The event carries `previousMoment`, kept for each subscription:** the moment of the last event A sent that subscription. A stores one value in the subscription's row. For each event it reads that value, stores the event's moment in its place, and then sends the event carrying the value it read. A stores nothing new for a change whose event it withholds. A does no arithmetic on it, so any moment format that sorts will do. An event that takes in undelivered ones carries the earliest `previousMoment` among them.
   - **C2.** Every write of a subscription's row, new or refreshed, sets the value to its timeline's latest moment, read in the same synchronous block as the write. That is safe: a higher value can only make a client sync, and a client that refreshed with a sync is already at that moment. A row that predates the column gets the same value when A wakes.
-  - **C3.** `Events.notify` is the one place A enqueues an event, and it sends one to a subscription for every write that changes a covered resource (the proposal's R10). So no change to the collection that the subscriber may read lies between `previousMoment` and the event's moment.
+  - **C3.** `Events.notify` is the one place A enqueues an event, and it sends one to a subscription for every write that changes a covered resource (the proposal's R10). So every change to the collection after `previousMoment`, that the subscriber may read, is one the event names. A merged event names the changes of each event it took in.
 - **DI7. On each event, a client compares `previousMoment` with the moment it is caught up to,** as two strings.
   - **`previousMoment` is later.** The client has not accounted for the event before this one: it was lost, it is late, or the sync it prompted did not apply in full. The client syncs, even when it holds every change this event names. If the earlier event arrives afterwards, it changes nothing.
   - **It is not later, and the client holds each uri in `changes` at that entry's revision or later.** The client moves forward to the greatest revision in `changes`, never backward, with no call. This is the writer's case.
@@ -265,7 +265,7 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
 
 **For the human:**
 
-- **The proposal is revised in the fork's working copy and not committed.** That file already held your uncommitted change to R10, R25, D27 and Q6, and a commit would have bundled it with this one. It is yours to read, commit and push. A copy of the file as it stood before this phase is in the session's scratchpad.
+- **The proposal is revised in the fork's working copy and not committed.** That file already held your uncommitted change to R10, R25, D27 and Q6, and a commit would have bundled it with this one. It is yours to read, commit and push. A copy of the file as it stood before this phase is at `../drafts/proposal-before-sync-2026-11-11.md`, beside this repo.
 - **"Catch-up" stays a word of the proposal,** defined as a sync that names a `from`, beside "first read", a sync that names none. Most rules that said catch-up are still right as they stand, so R14, R19, R21 and R23 changed by a few words each.
 - **R10 states `previousMoment` as an invariant:** no change the subscriber may read lies after it and before the event's moment. It then names the two moments that serve, and says a server SHOULD send the later. The prototype does exactly that.
 - **R18 lets a client subscribe with `events/subscribe` as a MAY,** since R20 already has the server list the event. It says such a client MUST then sync.
@@ -294,8 +294,34 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
 **Close-out notes:**
 
 - The README's example, the repo's `CLAUDE.md` opening and `tasks/demo-page.md`'s status line now describe one method.
-- `grep -rn -i 'collection/read\|collection/catchup\|ReadCollection\|CatchUpCollection\|two methods' src scripts demo README.md CLAUDE.md` prints nothing outside `src/vendor`, and in `test/` the two old names appear only in the `MethodNotFound` test.
+- `grep -rn -i 'collection/read\|collection/catchup\|ReadCollection\|CatchUpCollection\|two methods' src scripts demo README.md CLAUDE.md` prints nothing, and in `test/` the two old names appear only in the `MethodNotFound` test.
 - The row in `tasks/backlog.md` for the SDK reference implementation still speaks of `on_subscribe` and the catch-up. That file holds your uncommitted edit, so the row is left for you.
+
+### Verification, 2026-11-11
+
+Five verifiers, one for each phase, read the tree and fed the client orders by hand. Each phase's own criteria held. They found what follows, and all of it is fixed in the commit after phase 5.
+
+**Defects, each now with a test and a mutation that reds it:**
+
+- **A first read could put an older copy back.** With a wider and a narrower uri-specification watched, the wider one's sync brought a change while the narrower one's first read was on its way, and the first read then replaced it. A first read now keeps a copy from after it began: later than its `nextFrom`, and no earlier than the entry. The proposal's R23 says so.
+- **An event queued behind a watch that failed asked for first pages without end,** on a collection that pages. A queued task now runs only while its uri-specification is still watched.
+- **A paged start-over whose last sync failed kept a copy of a resource A no longer had,** while counting itself caught up. The copies no page named now go before the client moves its moment. The ordering was older than this task.
+- **A refresh on the demo page could wait on itself for ever** if the client's socket to B was down, with every button disabled. The reconnect no longer awaits the sync it queues.
+- **A restart between a write's commit and its event** would have left the next event naming the moment before the lost change, which a writer reads as nothing missed. `Events.stage` now stores the subscription's moment inside the write's transaction, and `send` queues the events after it. No test restarts A inside that window, so this one rests on the code.
+
+**Wording:**
+
+- **The proposal's R10 said two things its own coalescing broke.** It is now three sub-bullets: `previousMoment` is the later of the last event's moment and the timeline's latest when the subscription was written, and every change after it is one the event names. R10 had also run past the prose budget, and is within it again.
+- Comments that still counted six steps or two gates, the README's name for the restaged scene, and two unused imports are corrected.
+
+**Tests added:** where a no-call move lands when the copy is newer than the event, a row's starting moment when its sync stops short, and no request of any kind after the writer's write in the happy path.
+
+**For the human:**
+
+- **The Workers runtime crashed in the middle of `test/lane/events.test.ts` five times in about ten minutes, around 13:00,** each time just after "retries a receiver that hangs once the attempt times out", leaving the tests after it unrun and `npm test` at exit 1. One of the five was on the tree as committed before these fixes. It then stopped: that file ran clean 84 times, on the commit from before this task, on phases 1, 2 and 5, and on the current tree, and `npm test` ran clean eight times. Nothing ties it to a commit, and its cause is unknown. Treat a repeat as a finding.
+- **S22's second clause reads differently on the page.** A step that is not automatic clears every wire first, so in step 4 the Y-to-A wire is empty, which shows Y sent nothing.
+- **The client moves a narrower uri-specification's moment when a wider one syncs or moves.** Its comments called that R8, a rule the proposal no longer has, and § *Timelines and moments* says a client keeps a moment for each uri-specification. The citations are gone from `copies.ts`, two test titles still say R8, and `scripts/check-rule-coverage.mjs` still wants one. The same goes for D23 in `src/mcp-http.ts`. Both are older than this task, and are yours to settle with the proposal.
+- **In "missed events", Y now holds its events until its writes' replies are in,** as the happy path does, so each one moves it with no call, as the caption says.
 
 ## Non-goals
 

@@ -152,10 +152,14 @@ export class Events {
   /**
    * Sends one event for a committed write to each live subscription that covers a resource it
    * changed, listing the entries it covers. Every entry a subscription covers is on its timeline,
-   * so they share one moment, the event's `eventId`. It stores that moment as the subscription's
-   * last before it queues the event, which carries the moment it replaced (R10).
+   * so they share one moment, the event's `eventId`. `stage` builds each event and stores that
+   * moment as its subscription's last, and the caller runs it in the write's own transaction, so a
+   * change never commits without it. A restart between the two would otherwise lose the event and
+   * leave the next one naming the moment before the lost change, which a client would read as
+   * nothing missed (R10). `send` queues what `stage` built, once the write has committed.
    */
-  notify(changes: readonly Change[]): void {
+  stage(changes: readonly Change[]): Message[] {
+    const staged: Message[] = [];
     // A lapsed subscription's row stays until A next starts, and the queue makes no attempt past
     // its grant, so it gets nothing.
     for (const subscription of this.#options.subscriptions.named(COLLECTION_UPDATED)) {
@@ -167,7 +171,7 @@ export class Events {
       const previousMoment = this.#options.subscriptions.advance(subscription, eventId);
       const source: EventSource = { named, eventId, timestamp: covered[0].writtenAt, previousMoment, changes: covered.map(({ entry }) => entry) };
       const webhookId = `msg_${randomId(24)}`;
-      this.#options.deliveries.enqueue(subscription.id, {
+      staged.push({
         url: subscription.url,
         secret: subscription.secret,
         subscriptionId: subscription.id,
@@ -177,6 +181,12 @@ export class Events {
         source,
       });
     }
+    return staged;
+  }
+
+  /** Queues each staged event for delivery, in its subscription's slot. */
+  send(staged: readonly Message[]): void {
+    for (const message of staged) this.#options.deliveries.enqueue(message.subscriptionId, message);
   }
 
   /**

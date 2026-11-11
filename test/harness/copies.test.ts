@@ -149,6 +149,16 @@ describe("an event's previousMoment, fed by hand", () => {
     expect(froms).toEqual([moment(107)]);
   });
 
+  it("R11: moves to the event's own moment, not to a later revision its copy has reached since", async () => {
+    const { copies, froms } = await afterOwnWrite();
+    // A second write of its own, at 112, whose reply is in before the first one's event is read.
+    copies.wrote(URI, contentsAt('Its own, again'), [{ ...own, revision: moment(112) }]);
+    await copies.event({ eventId: moment(109), data: { ...TICKETS, previousMoment: moment(107), changes: [own] } });
+    expect(froms).toEqual([]);
+    // Another client's change at 110 or 111 would lie past 109, so the client may not skip it.
+    expect(copies.caughtUpTo(TICKETS)).toBe(moment(109));
+  });
+
   it('R15: never moves backward on an event older than where it is', async () => {
     const { copies } = await afterOwnWrite();
     await copies.event({ eventId: moment(109), data: { ...TICKETS, previousMoment: moment(107), changes: [own] } });
@@ -187,6 +197,93 @@ describe('watches that cross', () => {
     await narrower;
     expect(copies.copy(ten)?.revision).toBe(moment(105));
     expect(copies.caughtUpTo(TICKETS)).toBe(moment(105));
+  });
+
+  it("R15, R23: keeps a copy a wider uri-specification's sync brought, of a ticket a narrower one's slow first read then names at an earlier revision", async () => {
+    const wider = { uriTemplate: `${ROOT}/{type}/{id}` };
+    let answered!: () => void;
+    const answering = new Promise<void>((resolve) => (answered = resolve));
+    const requests: [string, string | undefined][] = [];
+    const options: CopiesOptions = {
+      sync: async (named, { from }) => {
+        requests.push([named === wider ? 'wider' : 'tickets', from]);
+        if (from === undefined) {
+          // Both first reads were built at 100, with ticket-3 at 90, and the narrower one's reply is slow.
+          if (named === TICKETS) await answering;
+          return first(100, [contentsAt('Printer jams', 90)]);
+        }
+        // ticket-3 changed at 105, which only a sync from before it brings.
+        return from < moment(105) ? caught(105, [{ uri: URI, effect: 'updated', previousRevision: moment(90), revision: moment(105), contents: contentsAt('Closed', 105) }]) : caught(Number(from));
+      },
+      readResource: async () => contentsAt('read'),
+    };
+    const copies = new Copies(options);
+    await copies.watch(wider);
+    const narrower = copies.watch(TICKETS);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await copies.trigger('started', wider);
+    expect([copies.copy(URI)?.revision, copies.caughtUpTo(TICKETS)]).toEqual([moment(105), moment(105)]);
+    answered();
+    await narrower;
+    // The first read's entry is from before 105, so it does not put the old ticket back.
+    expect([copies.copy(URI)?.revision, copies.caughtUpTo(TICKETS)]).toEqual([moment(105), moment(105)]);
+  });
+
+  it('R16: runs nothing for a uri-specification whose watch failed, so an event queued behind a paged first read that fails sends no request', async () => {
+    const requests: object[] = [];
+    let failPage2!: () => void;
+    const page2 = new Promise<never>((_resolve, reject) => (failPage2 = () => reject(new Error('A is away'))));
+    const copies = new Copies({
+      sync: async (_named, request) => {
+        requests.push(request);
+        if (requests.length > 10) throw new Error('STOP: the client keeps asking');
+        if (request.cursor !== undefined) return page2;
+        // Any first page of this collection says there is more.
+        return { ...first(100, [contentsAt('Printer jams', 90)]), hasMore: true, nextCursor: 'page-2' };
+      },
+      readResource: async () => contentsAt('read'),
+    });
+    const watching = copies.watch(TICKETS);
+    void watching.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Page 1 subscribed, so a change during the read arrives as an event, which waits (R16).
+    const event = copies.event({ eventId: moment(108), data: { ...TICKETS, previousMoment: moment(100), changes: [{ uri: URI, effect: 'updated', revision: moment(108) }] } });
+    failPage2();
+    await expect(watching).rejects.toThrow('A is away');
+    await event;
+    expect(requests).toEqual([{ subscribe: true }, { cursor: 'page-2' }]);
+    expect(copies.caughtUpTo(TICKETS)).toBeUndefined();
+  });
+
+  it('R23: on a paged start-over whose sync after the last page fails, has already dropped the copy no page named', async () => {
+    const seven = `${ROOT}/tickets/ticket-7`;
+    const seventh: Contents = { ...contentsAt('Paper out again', 107), uri: seven };
+    let phase: 'watching' | 'expired' | 'paging' | 'after' = 'watching';
+    const copies = new Copies({
+      sync: async (_named, { from, cursor }) => {
+        if (phase === 'watching') return first(107, [contentsAt('Printer jams', 101), seventh]);
+        if (phase === 'expired') {
+          phase = 'paging';
+          throw expired();
+        }
+        // The restored A holds ticket-3 alone, at 103, and its timeline starts at 180.
+        if (from === undefined && cursor === undefined) return { ...first(180, [contentsAt('Restored', 103)]), hasMore: true, nextCursor: 'page-2' };
+        if (cursor !== undefined) return { ...first(180), hasMore: true };
+        if (phase === 'paging') {
+          phase = 'after';
+          throw new Error('A is away');
+        }
+        return caught(Number(from));
+      },
+      readResource: async () => contentsAt('read'),
+    });
+    await copies.watch(TICKETS);
+    expect(copies.copy(seven)?.revision).toBe(moment(107));
+    phase = 'expired';
+    await expect(copies.trigger('started')).rejects.toThrow('A is away');
+    expect(copies.caughtUpTo(TICKETS)).toBe(moment(180));
+    expect(copies.copy(seven)).toBeUndefined();
+    expect(copies.copy(URI)?.revision).toBe(moment(103));
   });
 
   it('leaves nothing watched after a watch that fails, so a later one starts afresh', async () => {

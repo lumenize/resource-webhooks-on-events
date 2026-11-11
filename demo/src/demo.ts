@@ -99,7 +99,7 @@ export interface Scene {
   roles: Record<Client, string>;
   /** The line shown once the scene is prepared. */
   ready: string;
-  /** Whether X and Y are watching once prepared, caught up as after the happy path's step 3. */
+  /** Whether X and Y are watching once prepared, caught up as after the happy path's step 1. */
   watching: boolean;
   steps: Step[];
 }
@@ -145,7 +145,7 @@ export const state = reactive({
   /** Where the wires' popovers start: Auth/Reset, or the step under way. */
   since: 'Auth/Reset',
   pulses: [] as Pulse[],
-  /** The wire whose popover is pinned open, as step 5 pins the event's, until a click anywhere. */
+  /** The wire whose popover is pinned open, as step 3 pins the event's, until a click anywhere. */
   pinned: undefined as WireName | undefined,
 });
 
@@ -592,7 +592,7 @@ function until(condition: () => boolean, timeoutMs = 15_000): Promise<void> {
 const BOTH_WRITE = { X: 'a client, and a writer', Y: 'a client, and a writer' };
 const WATCHING = 'X and Y are watching, each caught up as after the happy path’s step 1.';
 
-// The happy path: each title is the proposal's heading, and each line paraphrases its text.
+// The happy path: each step is one of the proposal's four, and each line paraphrases its text.
 const HAPPY: Scene = {
   id: 'happy',
   title: 'The proposal’s simple happy path',
@@ -767,6 +767,9 @@ const MISSED: Scene = {
       line: 'Y closes ticket-3, reopens it and closes it again, deletes ticket-9, and opens ticket-11. Each of Y’s own events moves it forward with no call. B can’t reach X, so A will retry.',
       run: async (_x, y) => {
         await y.fresh();
+        // Y reads each of its events once the write's reply is in, as in the happy path, so none
+        // finds Y without the revision it names.
+        y.hold(true);
         await update(y, TICKET_3, { title: 'Printer jams', status: 'closed' });
         await update(y, TICKET_3, { title: 'Printer jams', status: 'open' });
         await update(y, TICKET_3, { title: 'Printer jams, again', status: 'closed' });
@@ -774,6 +777,9 @@ const MISSED: Scene = {
         const contents = json({ title: 'Stapler stuck', status: 'open' });
         const created = await y.client.request<WriteResourceResult>('resources/create', { uri: TICKET_11, contents });
         y.copies.wrote(TICKET_11, contents, created.changes);
+        // The last write's event has arrived, alone or with earlier ones it took in.
+        await until(() => y.held.some(({ eventId }) => eventId === created.revision));
+        await y.release();
         await until(() => Boolean(state.A.latest) && y.copies.caughtUpTo(TEMPLATE) === state.A.latest);
       },
     },
