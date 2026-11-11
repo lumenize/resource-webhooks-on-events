@@ -203,6 +203,8 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
   const pongs: (() => void)[] = [];
   let holding = false;
   let closing = false;
+  // Set once the page has replaced this client, after which it tells the page nothing more.
+  let disposed = false;
   let subscribed = false;
   let hookUrl = '';
   let socket: WebSocket | undefined;
@@ -253,7 +255,8 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
       else void copies.event(collectionEvent);
     });
     next.addEventListener('close', (event) => {
-      if (socket !== next) return;
+      // A client the page replaced at Auth/Reset closes late, and its close is not the new one's.
+      if (socket !== next || disposed) return;
       clearInterval(heartbeat);
       hooks.connected(false);
       hooks.socket({ type: 'closed', code: event.code });
@@ -346,6 +349,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     },
     close: () => {
       closing = true;
+      disposed = true;
       clearInterval(heartbeat);
       if (socket?.readyState === WebSocket.OPEN) socket.close(1000, 'Done');
     },
