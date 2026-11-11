@@ -182,7 +182,7 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
    - **Mutation note,** by criterion: S14, a sync after `hasMore: false`. S15, dropping the move. S16, moving without comparing `previousMoment`. S17, syncing whenever `previousMoment` differs from the client's moment. S18, treating absent `changes` as held, or a missing `previousMoment` as not later. S19, as S16. S20, ending the loop at the last `nextCursor`.
 
 3. **The demo page runs the four-step happy path, and Y's moment moves on screen.**
-   - **`demo/src/wiring.ts`:** the three options become one, and the two gates, `subscribe` and `catchUp`, become one gate on a client's first sync.
+   - **`demo/src/wiring.ts`:** the three options become one, and the two gates, `subscribe` and `catchUp`, go, since a watch is now one step.
    - **`demo/src/demo.ts` and `App.vue`:** the happy path's steps are the four of § *Objective*, and each scene's caption lines say what now happens. "A writer's copy runs ahead" is restaged as DI9 says.
    - **Success criteria (capable of failing),** checked by driving the page under `npm run demo:dev` in a browser. The page has no test lane, and `eventsScenario` covers the same protocol in the lane and deployed.
      - S21. After step 1, the X-to-A and Y-to-A wires each show one `resources/collection/sync` and no `events/subscribe`.
@@ -243,6 +243,23 @@ Each phase leaves `npm test` green. The first four are what the video needs (D7)
 - With the subscription made on the first page, a change during a paged first read now reaches the client as a real event. The paged tests hold events back with `forward(false)` so only the watch's own syncs can bring the change.
 
 **Close-out notes:** `test/client/gate.ts` no longer imports `subscribe` from `parties.ts`, which the events tests still use.
+
+### Phase 3, built 2026-11-11
+
+**For the human:**
+
+- **The page has no gate left on a watch.** The phase asked for one gate on a client's first sync. The old gates existed to split one watch across three buttons, and a watch is now one call behind one button, so nothing waits on a gate. `Gate` stays for `holdReply`.
+- **The log's wording changed.** An event the client holds reads "held already, no call", and one that brings a sync reads "synced". A trigger reads "reconnected: syncs".
+- **The restaged scene is titled "A writer's own event arrives late".** Its last step reverses X's two held events before releasing them, so Y's is read first. Phase 4 gives the proposal's example the same title.
+- **The page was driven under `npm run demo:dev` by a script,** `../demo-video/drive-check.mjs`, which presses every button of every scene and prints each box's moment, each client's log and what crossed each client's wire to A. All five scenes ran to their last step on 2026-11-11, and S21 to S24 held in that run. The script lives outside this repo, with the video's tooling, since this repo's left-behind check refuses Playwright.
+- **Nothing is deployed.** The public page still runs the three-call flow.
+
+**Retro notes:**
+
+- The demo's sources are outside `tsconfig.json`. A one-off `tsc` over `demo/src` showed only the two errors in `src/auth/signing.ts` that the DOM library causes, which were there before.
+- The checks of this phase are a driven run, not tests, so they have no mutation of their own. S22 and the first half of S23 rest on the move that phase 2's mutations cover.
+
+**Close-out notes:** `demo.ts` lost `readFrom`, `results`, `watches` and `answered`, which only the three-step start used.
 
 ## Non-goals
 

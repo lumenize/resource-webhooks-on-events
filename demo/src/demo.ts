@@ -58,7 +58,7 @@ export interface ClientView {
 /** One exchange over a wire, its request and its response together, or one message alone. */
 export interface WireEntry {
   id: number;
-  /** What it was, as `resources/collection/read`. */
+  /** What it was, as `resources/collection/sync`. */
   what: string;
   body: Record<string, unknown>;
 }
@@ -68,7 +68,7 @@ export interface WireView {
   log: WireEntry[];
   /** When the runtime last answered a ping on the wire, by the page's clock, which it did without running B. */
   pongAt?: number;
-  /** What the label says the last message was, as `resources/collection/read ←`. */
+  /** What the label says the last message was, as `resources/collection/sync ←`. */
   what?: string;
   count: number;
 }
@@ -356,18 +356,11 @@ function control(party: 'A' | 'B', action: string): Promise<Record<string, unkno
 // ——— the clients ——————————————————————————————————————————————————————————————
 
 const parties: { a?: Party; X?: Watcher; Y?: Watcher } = {};
-const watches: Partial<Record<Client, Promise<void>>> = {};
-// The moment each client's read named as its nextFrom, which it is caught up to once it reads,
-// as the proposal's step 1 says, though Copies records it only once the subscribe returns.
-const readFrom: Partial<Record<Client, string>> = {};
-// Each client's last reply to each method, so a step can tell a failure from a success.
-const results: Record<Client, Map<string, Exchange>> = { X: new Map(), Y: new Map() };
-
 function refresh(client: Client): void {
   const party = parties[client];
   if (!party) return;
   const view = state[client];
-  view.caughtUpTo = party.copies.caughtUpTo(TEMPLATE) ?? readFrom[client];
+  view.caughtUpTo = party.copies.caughtUpTo(TEMPLATE);
   view.copies = [...party.copies.copies()]
     .filter(([uri]) => uri.startsWith(`${A_ROOT}/tickets/`))
     .sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true }))
@@ -393,8 +386,6 @@ function hooksFor(client: Client): ClientHooks {
       pulse(wire, 'A');
       const entry = exchanges.get(exchange) ?? onWire(wire, exchange.method, `${exchange.method} ←`, { request: { method: exchange.method, params: exchange.params } });
       answer(wire, entry, `${exchange.method} ←`, { response: exchange.reply });
-      if (exchange.method === 'resources/collection/read' && !exchange.failed) readFrom[client] = (exchange.reply as { nextFrom?: string }).nextFrom;
-      results[client].set(exchange.method, exchange);
       state[wire === 'X-A' ? 'X' : 'Y'].ready = true;
       queueMicrotask(() => refresh(client));
     },
@@ -438,10 +429,12 @@ function hooksFor(client: Client): ClientHooks {
     log(entry: LogEntry) {
       const view = state[client];
       if (entry.kind === 'event') {
-        view.log.push({ text: `event ${short(entry.eventId)}: ${entry.outcome}`, tone: entry.outcome === 'skipped' ? 'skip' : 'catch' });
+        // An event the client holds already costs it no call, and one it lacks, or one that shows
+        // an earlier event unaccounted for, brings a sync (R11).
+        view.log.push({ text: `event ${short(entry.eventId)}: ${entry.outcome === 'skipped' ? 'held already, no call' : 'synced'}`, tone: entry.outcome === 'skipped' ? 'skip' : 'catch' });
       } else if (entry.kind === 'trigger' && entry.trigger !== 'started') {
-        // R12's catch-ups when events may have been missed: on reconnecting, a refresh or a gap.
-        view.log.push({ text: `${entry.trigger === 'gap' ? 'a gap' : entry.trigger}: catches up`, tone: 'catch' });
+        // R12's syncs when events may have been missed: on reconnecting, a refresh or a gap.
+        view.log.push({ text: `${entry.trigger === 'gap' ? 'a gap' : entry.trigger}: syncs`, tone: 'catch' });
       } else if (entry.kind === 'started over') {
         view.log.push({ text: `started over: ${entry.reason}`, tone: 'info' });
       } else if (entry.kind === 'read failed' || entry.kind === 'poll failed') {
@@ -475,7 +468,7 @@ async function write(party: Party, method: 'resources/create' | 'resources/updat
 
 /**
  * Wipes A and B, signs X, Y and the writer in, opens X's and Y's sockets, and seeds the tickets.
- * A scene that starts with X and Y watching then has each read, subscribe and catch up.
+ * A scene that starts with X and Y watching then has each sync with its delivery.
  */
 export function prepare(): Promise<void> {
   return run(async () => {
@@ -487,10 +480,6 @@ export function prepare(): Promise<void> {
     hooks.clear();
     posts.clear();
     earlyAnswers.length = 0;
-    delete readFrom.X;
-    delete readFrom.Y;
-    results.X.clear();
-    results.Y.clear();
     Object.assign(state, { done: -1, X: emptyClient(), Y: emptyClient(), wires: emptyWires(), names: {}, since: 'Auth/Reset', pinned: undefined });
     state.status = 'Wiping A and B…';
     for (const party of ['A', 'B'] as const) {
@@ -512,13 +501,9 @@ export function prepare(): Promise<void> {
     const seven = await write(a, 'resources/create', 'ticket-7', { title: 'Paper out again', status: 'open' });
     await write(a, 'resources/update', 'ticket-7', { title: 'Paper out again', status: 'closed', duplicateOf: 'ticket-9' }, seven.revision);
     if (currentScene().watching) {
-      // The scene starts where the happy path's step 3 ends: each has read, subscribed and caught up.
-      state.status = 'X and Y read, subscribe and catch up…';
+      // The scene starts where the happy path's step 1 ends: each has synced, and is subscribed.
+      state.status = 'X and Y sync…';
       const [x, y] = both();
-      for (const each of [x, y]) {
-        each.gates.subscribe.open();
-        each.gates.catchUp.open();
-      }
       await Promise.all([x.copies.watch(TEMPLATE), y.copies.watch(TEMPLATE)]);
     }
     state.done = 0;
@@ -587,22 +572,6 @@ async function remove(party: Watcher, uri: string): Promise<DeleteResourceResult
   return reply;
 }
 
-/**
- * Waits until both clients have A's reply to `method`, and throws A's error if either reply is
- * one. `failed` is a promise that rejects if the work under way fails before any reply comes.
- */
-async function answered(method: string, failed?: () => Promise<unknown>): Promise<void> {
-  const waiting = until(() => results.X.has(method) && results.Y.has(method), 20_000);
-  await (failed ? Promise.race([waiting, failed().then(() => waiting)]) : waiting);
-  for (const client of ['X', 'Y'] as const) {
-    const exchange = results[client].get(method)!;
-    if (exchange.failed) {
-      const message = (exchange.reply as { message?: string } | undefined)?.message ?? String(exchange.reply);
-      throw new Error(`${client}'s ${method} failed: ${message}. Press Auth/Reset.`);
-    }
-  }
-}
-
 function until(condition: () => boolean, timeoutMs = 15_000): Promise<void> {
   return new Promise((resolve, reject) => {
     const started = Date.now();
@@ -621,7 +590,7 @@ function until(condition: () => boolean, timeoutMs = 15_000): Promise<void> {
 // ——— the scenes ——————————————————————————————————————————————————————————————
 
 const BOTH_WRITE = { X: 'a client, and a writer', Y: 'a client, and a writer' };
-const WATCHING = 'X and Y are watching, each caught up as after the happy path’s step 3.';
+const WATCHING = 'X and Y are watching, each caught up as after the happy path’s step 1.';
 
 // The happy path: each title is the proposal's heading, and each line paraphrases its text.
 const HAPPY: Scene = {
@@ -632,44 +601,20 @@ const HAPPY: Scene = {
   watching: false,
   steps: [
     {
-      title: 'X and Y read the collection',
-      line: 'Each reads every ticket with its revision, and the moment it is caught up to.',
+      title: 'X and Y sync the collection',
+      line: 'One call each reads every ticket with its revision, subscribes, and names the moment the client is caught up to.',
       run: async (x, y) => {
-        // Each watch reads, then waits at its subscribe gate until step 2.
-        watches.X = x.copies.watch(TEMPLATE);
-        watches.Y = y.copies.watch(TEMPLATE);
-        // A watch that fails ends here, so the step reports it rather than waiting on.
-        void watches.X.catch(() => undefined);
-        void watches.Y.catch(() => undefined);
-        await answered('resources/collection/read');
-      },
-    },
-    {
-      title: 'X and Y subscribe',
-      line: 'Each subscribes through SEP-3415, so A holds a subscription for each.',
-      run: async (x, y) => {
-        x.gates.subscribe.open();
-        y.gates.subscribe.open();
-        await answered('events/subscribe', () => Promise.race([watches.X, watches.Y]));
-      },
-    },
-    {
-      title: 'X and Y catch up',
-      line: 'Each catches up from the read’s moment. Nothing changed since, so nothing comes.',
-      run: async (x, y) => {
-        x.gates.catchUp.open();
-        y.gates.catchUp.open();
-        await Promise.all([watches.X, watches.Y]).catch((error: unknown) => {
+        await Promise.all([x.copies.watch(TEMPLATE), y.copies.watch(TEMPLATE)]).catch((error: unknown) => {
           throw new Error(`${error instanceof Error ? error.message : String(error)}. Press Auth/Reset.`);
         });
       },
     },
     {
       title: 'Y closes ticket-3',
-      line: 'Y’s copy is at the new revision, and Y stays caught up to where it was.',
+      line: 'Y’s copy is at the new revision. Y stays caught up to where it was until its own event arrives.',
       run: async (x, y) => {
-        // Both hold the event the write sends, so step 5 shows it arrive and step 6 shows each
-        // read it: Y skips it, since its write's reply gave it the revision, and X catches up.
+        // Both hold the event the write sends, so step 3 shows it arrive and step 4 shows each
+        // read it: Y moves with no call, since its write's reply gave it the revision, and X syncs.
         x.hold(true);
         y.hold(true);
         // A POSTs the event to both hooks as the write commits, and B passes it only down a
@@ -681,8 +626,8 @@ const HAPPY: Scene = {
     },
     {
       title: 'A sends the event',
-      line: 'A POSTs the change to each subscription’s webhook as Y’s write commits, with none of the ticket’s contents.',
-      // A sends the event as Y's write commits, so this step follows step 4 by itself.
+      line: 'A POSTs the change to each subscription’s webhook as Y’s write commits, naming the moment before it, with none of the ticket’s contents.',
+      // A sends the event as Y's write commits, so this step follows step 2 by itself.
       auto: true,
       run: async (x, y) => {
         await until(() => x.held.length > 0 && y.held.length > 0);
@@ -692,10 +637,11 @@ const HAPPY: Scene = {
       },
     },
     {
-      title: 'X catches up',
-      line: 'Y holds ticket-3 at that revision already, so it skips and stays caught up where it was. X catches up, with a merge patch.',
+      title: 'Y moves forward, and X syncs',
+      line: 'Y holds ticket-3 at that revision, and is caught up to the event’s previousMoment, so it moves to A’s moment with no call. X syncs from where it was, and gets a merge patch.',
       run: async (x, y) => {
         await y.release();
+        await until(() => Boolean(state.A.latest) && y.copies.caughtUpTo(TEMPLATE) === state.A.latest);
         refresh('Y');
         await new Promise((resolve) => setTimeout(resolve, 700));
         await x.release();
@@ -706,18 +652,19 @@ const HAPPY: Scene = {
   ],
 };
 
-// § *A writer's copy runs ahead of its catch-ups*: X writes, Y writes on top, and X's catch-up
-// brings a patch from ticket-3 as it stood at X's moment, which X's copy no longer is.
+// § *A writer's own event arrives late*: X writes, Y writes on top, and Y's event reaches X before
+// X's own. It names a moment X has not accounted for, so X syncs, and the patch starts from
+// ticket-3 as it stood at X's moment, which X's copy no longer is.
 const AHEAD: Scene = {
   id: 'ahead',
-  title: 'A writer’s copy runs ahead of its catch-ups',
+  title: 'A writer’s own event arrives late',
   roles: BOTH_WRITE,
   ready: WATCHING,
   watching: true,
   steps: [
     {
       title: 'X updates ticket-3',
-      line: 'X’s copy is at the new revision, and X stays caught up to where it was. X holds its events for now.',
+      line: 'X’s copy is at the new revision, and X stays caught up to where it was. X’s events are held back for now.',
       run: async (x, y) => {
         x.hold(true);
         await Promise.all([x.fresh(), y.fresh()]);
@@ -726,7 +673,7 @@ const AHEAD: Scene = {
     },
     {
       title: 'Y updates ticket-3',
-      line: 'Y caught up on X’s change from its event, so it writes on top of it.',
+      line: 'Y synced X’s change when its event arrived, so it writes on top of it.',
       run: async (x, y) => {
         await until(() => y.copies.copy(TICKET_3)?.revision === atA(TICKET_3));
         await Promise.all([x.fresh(), y.fresh()]);
@@ -734,9 +681,12 @@ const AHEAD: Scene = {
       },
     },
     {
-      title: 'X catches up',
-      line: 'The patch starts from ticket-3 as it stood at X’s moment, not from X’s own copy, so X reads ticket-3 whole.',
+      title: 'Y’s event reaches X before X’s own',
+      line: 'It names a moment X hasn’t accounted for, so X syncs. The patch starts from ticket-3 as it stood at X’s moment, not from X’s own copy, so X reads ticket-3 whole. X’s own event, last, changes nothing.',
       run: async (x) => {
+        // The newer event first, as a delivery that overtook a retry would arrive.
+        await until(() => x.held.length === 2);
+        x.held.reverse();
         await x.release();
         await until(() => x.copies.copy(TICKET_3)?.revision === atA(TICKET_3));
       },
@@ -756,7 +706,7 @@ const CROSS: Scene = {
   steps: [
     {
       title: 'X updates ticket-3, and its reply is slow',
-      line: 'The event for X’s change arrives first. X doesn’t hold that revision yet, so it catches up.',
+      line: 'The event for X’s change arrives first. X doesn’t hold that revision yet, so it syncs.',
       run: async (x, y) => {
         await Promise.all([x.fresh(), y.fresh()]);
         const copy = x.copies.copy(TICKET_3);
@@ -771,7 +721,7 @@ const CROSS: Scene = {
     },
     {
       title: 'Y deletes ticket-3',
-      line: 'X catches up again, and keeps ticket-3’s tombstone.',
+      line: 'X syncs again, and keeps ticket-3’s tombstone.',
       run: async (x, y) => {
         await until(() => y.copies.copy(TICKET_3)?.revision === atA(TICKET_3));
         await Promise.all([x.fresh(), y.fresh()]);
@@ -796,7 +746,7 @@ const CROSS: Scene = {
   ],
 };
 
-// § *Missed events*: X sleeps while Y changes tickets, and catches up once on reconnecting (R12).
+// § *Missed events*: X sleeps while Y changes tickets, and syncs once on reconnecting (R12).
 const MISSED: Scene = {
   id: 'missed',
   title: 'Missed events: X back from a night away',
@@ -814,7 +764,7 @@ const MISSED: Scene = {
     },
     {
       title: 'Y works on the tickets',
-      line: 'Y closes ticket-3, reopens it and closes it again, deletes ticket-9, and opens ticket-11. B can’t reach X, so A will retry.',
+      line: 'Y closes ticket-3, reopens it and closes it again, deletes ticket-9, and opens ticket-11. Each of Y’s own events moves it forward with no call. B can’t reach X, so A will retry.',
       run: async (_x, y) => {
         await y.fresh();
         await update(y, TICKET_3, { title: 'Printer jams', status: 'closed' });
@@ -824,11 +774,12 @@ const MISSED: Scene = {
         const contents = json({ title: 'Stapler stuck', status: 'open' });
         const created = await y.client.request<WriteResourceResult>('resources/create', { uri: TICKET_11, contents });
         y.copies.wrote(TICKET_11, contents, created.changes);
+        await until(() => Boolean(state.A.latest) && y.copies.caughtUpTo(TEMPLATE) === state.A.latest);
       },
     },
     {
-      title: 'X comes back, and catches up once',
-      line: 'X catches up from where it was: each changed ticket once, as it now stands, and ticket-9 as a tombstone.',
+      title: 'X comes back, and syncs once',
+      line: 'X syncs from where it was: each changed ticket once, as it now stands, and ticket-9 as a tombstone.',
       run: async (x) => {
         await x.offline(false);
         await until(() => Boolean(state.A.latest) && x.copies.caughtUpTo(TEMPLATE) === state.A.latest);
@@ -861,7 +812,7 @@ const RESTORE: Scene = {
     },
     {
       title: 'X refreshes, and starts over',
-      line: 'X catches up from a moment A no longer answers from, so A says momentExpired. X reads the collection again, and drops ticket-7.',
+      line: 'X syncs from a moment A no longer answers from, so A says momentExpired. X reads the collection again, with its delivery, and drops ticket-7.',
       run: async (x) => {
         await x.copies.refresh(TEMPLATE);
         await until(() => Boolean(state.A.latest) && x.copies.caughtUpTo(TEMPLATE) === state.A.latest && !x.copies.copy(`${A_ROOT}/tickets/ticket-7`));

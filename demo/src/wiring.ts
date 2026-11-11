@@ -6,7 +6,7 @@ import { clientMetadataUrl } from '../../src/auth/metadata.ts';
 import { fromBase64url } from '../../src/auth/signing.ts';
 import { Copies, PATCH_MIME_TYPES, type CollectionEvent, type Contents, type LogEntry } from '../../src/client/copies.ts';
 import { createMcpClient, OAuthError, OAuthSession, type McpClient } from '../../src/client/mcp-client.ts';
-import { COLLECTION_UPDATED, type CatchUpCollectionResult, type ReadCollectionResult, type UriSpecification } from '../../src/extension-types.ts';
+import type { SyncCollectionResult } from '../../src/extension-types.ts';
 import { redact } from '../../src/redact.ts';
 import { newSecret } from '../../src/standard-webhooks.ts';
 
@@ -71,8 +71,6 @@ export interface Watcher extends Party {
   copies: Copies;
   /** The client's hook on B, as `…/gateway/B/hooks/{sub}/{instance}`. */
   hookUrl: string;
-  /** The subscribe waits for the first gate, and the first catch-up for the second. */
-  gates: { subscribe: Gate; catchUp: Gate };
   /** While on, an event that reaches the client waits in `held`, unread, until `release`. */
   hold(on: boolean): void;
   held: CollectionEvent[];
@@ -84,7 +82,7 @@ export interface Watcher extends Party {
   holdReply(method: string): Gate;
   /**
    * Closes the socket to B and keeps it closed, as a sleeping laptop's, or opens it again, after
-   * which the client catches up (R12).
+   * which the client syncs (R12).
    */
   offline(on: boolean): Promise<void>;
   close(): void;
@@ -192,9 +190,8 @@ const PING_MS = 10_000;
 
 /**
  * Signs X or Y in, opens its socket to B with a token for that socket, registers a new secret
- * on it, and builds its copies, whose subscribe and first catch-up wait for the page's gates. A
- * socket that drops is opened again with a new token and the same secret, after which the client
- * catches up, as R12 asks on reconnecting to its gateway.
+ * on it, and builds its copies. A socket that drops is opened again with a new token and the same
+ * secret, after which the client syncs, as R12 asks on reconnecting to its gateway.
  */
 export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher> {
   const replyHolds = new Map<string, Gate>();
@@ -202,7 +199,6 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
   const instance = `i_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
   const socketUrl = `${ORIGIN}/gateway/B/ws/${instance}`;
   const secret = newSecret();
-  const gates = { subscribe: new Gate(), catchUp: new Gate() };
   const held: CollectionEvent[] = [];
   const pongs: (() => void)[] = [];
   let holding = false;
@@ -214,25 +210,18 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
   let reconnecting: Promise<void> | undefined;
 
   const copies = new Copies({
-    read: (named, cursor) => party.client.request<ReadCollectionResult>('resources/collection/read', { ...named, ...(cursor === undefined ? {} : { cursor }) }),
-    subscribe: async (named: UriSpecification) => {
-      await gates.subscribe.wait();
-      // A's challenge reaches B as soon as A has the subscribe, and B answers it only for a
-      // socket it counts live.
-      await fresh();
-      const result = await party.client.request('events/subscribe', {
-        name: COLLECTION_UPDATED,
-        arguments: named,
-        delivery: { mode: 'webhook', url: hookUrl, secret },
-        cursor: null,
-        ttlMs: 3_600_000,
+    sync: async (named, { from, cursor, subscribe }) => {
+      // A's challenge reaches B as soon as A has a sync that carries a delivery, and B answers it
+      // only for a socket it counts live.
+      if (subscribe) await fresh();
+      const result = await party.client.request<SyncCollectionResult>('resources/collection/sync', {
+        ...named,
+        ...(from === undefined ? {} : { from, patchMimeTypes: PATCH_MIME_TYPES }),
+        ...(cursor === undefined ? {} : { cursor }),
+        ...(subscribe ? { delivery: { mode: 'webhook', url: hookUrl, secret }, ttlMs: 3_600_000 } : {}),
       });
-      subscribed = true;
+      if (subscribe) subscribed = true;
       return result;
-    },
-    catchUp: async (named, from) => {
-      await gates.catchUp.wait();
-      return party.client.request<CatchUpCollectionResult>('resources/collection/catchup', { ...named, from, patchMimeTypes: PATCH_MIME_TYPES });
     },
     readResource: async (uri) => ((await party.client.request('resources/read', { uri })).contents as Contents[])[0],
     log: (entry) => hooks.log(entry),
@@ -257,7 +246,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
       arrived.dispatchEvent(new CustomEvent('message', { detail: message }));
       if (message.type !== 'delivery') return;
       const body = JSON.parse(message.body as string) as Record<string, unknown>;
-      // SEP-3415's gap envelope says events may have been missed, which R12 answers with a catch-up.
+      // SEP-3415's gap envelope says events may have been missed, which R12 answers with a sync.
       if (body.type === 'gap') return void copies.trigger('gap');
       const collectionEvent = body as unknown as CollectionEvent;
       if (holding) held.push(collectionEvent);
@@ -277,7 +266,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     socket = next;
     next.send(JSON.stringify({ secret }));
     hooks.socketSent(redact({ secret }) as Record<string, unknown>);
-    // A's challenge reaches B before the subscribe's answer, so the client subscribes only once B
+    // A's challenge reaches B before the sync's answer, so the client subscribes only once B
     // holds its secret.
     const registered = await nextMessage(messages, arrived, ({ type }) => type === 'secret-registered' || type === 'secret-refused');
     if (registered.type !== 'secret-registered') throw new Error(`B refused ${name}'s secret`);
@@ -296,7 +285,7 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     reconnecting ??= (async () => {
       try {
         await connect();
-        if (subscribed && gates.catchUp.isOpen) await copies.trigger('reconnected');
+        if (subscribed) await copies.trigger('reconnected');
       } catch {
         if (!closing) setTimeout(() => void reconnect(), 3000);
       } finally {
@@ -330,7 +319,6 @@ export async function watcher(name: string, hooks: ClientHooks): Promise<Watcher
     get hookUrl() {
       return hookUrl;
     },
-    gates,
     held,
     hold: (on) => (holding = on),
     release: async () => {
