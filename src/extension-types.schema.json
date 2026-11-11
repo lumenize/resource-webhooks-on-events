@@ -291,6 +291,10 @@
                     },
                     "type": "array"
                 },
+                "previousMoment": {
+                    "description": "The moment of the event before this one on the same subscription, or the timeline's latest\nmoment when the subscription was last written. A client caught up to an earlier moment has\nnot accounted for that event, and syncs (R11).",
+                    "type": "string"
+                },
                 "uri": {
                     "description": "A uri, a collection of one.",
                     "format": "uri",
@@ -301,6 +305,9 @@
                     "type": "string"
                 }
             },
+            "required": [
+                "previousMoment"
+            ],
             "type": "object"
         },
         "CreateResourceRequest": {
@@ -870,6 +877,149 @@
             ],
             "type": "object"
         },
+        "SyncCollectionRequest": {
+            "description": "Brings a collection to the client: every resource in it, or every change after `from`, and\nwith a `delivery`, a subscription to its events (R13, R18, R22).",
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/RequestId"
+                },
+                "jsonrpc": {
+                    "const": "2.0",
+                    "type": "string"
+                },
+                "method": {
+                    "const": "resources/collection/sync",
+                    "type": "string"
+                },
+                "params": {
+                    "$ref": "#/$defs/SyncCollectionRequestParams"
+                }
+            },
+            "required": [
+                "id",
+                "jsonrpc",
+                "method",
+                "params"
+            ],
+            "type": "object"
+        },
+        "SyncCollectionRequestParams": {
+            "properties": {
+                "_meta": {
+                    "$ref": "#/$defs/RequestMetaObject"
+                },
+                "cursor": {
+                    "description": "An opaque token representing the current pagination position.\nIf provided, the server should return results starting after this cursor.",
+                    "type": "string"
+                },
+                "delivery": {
+                    "$ref": "#/$defs/WebhookDelivery",
+                    "description": "Where to deliver the collection's events, as in SEP-3415's `events/subscribe`. With it the\nsync makes the subscription, or refreshes it, in the same step as its result (R18). Without\nit the sync stores nothing."
+                },
+                "from": {
+                    "description": "The moment the client is caught up to, which makes the sync a catch-up (R13). Without it the\nsync is a first read, of every resource in the collection (R22).",
+                    "type": "string"
+                },
+                "patchMimeTypes": {
+                    "description": "The patch formats the client applies, by media type (R19).",
+                    "items": {
+                        "type": "string"
+                    },
+                    "type": "array"
+                },
+                "ttlMs": {
+                    "description": "The subscription's suggested lifetime in milliseconds, as in SEP-3415. `null` asks for no expiry.",
+                    "type": [
+                        "null",
+                        "integer"
+                    ]
+                },
+                "uri": {
+                    "description": "A uri, a collection of one.",
+                    "format": "uri",
+                    "type": "string"
+                },
+                "uriTemplate": {
+                    "description": "A uriTemplate the server lists, or one a template it lists covers (R24).",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "_meta"
+            ],
+            "type": "object"
+        },
+        "SyncCollectionResult": {
+            "properties": {
+                "_meta": {
+                    "$ref": "#/$defs/ResultMetaObject",
+                    "description": "Extends {@link MetaObject} with additional result-specific fields. All key naming rules from `MetaObject` apply."
+                },
+                "changes": {
+                    "description": "A first read's resources, each as a `created` entry with its contents, or a catch-up's changes (R19).",
+                    "items": {
+                        "$ref": "#/$defs/CollectionChange"
+                    },
+                    "type": "array"
+                },
+                "hasMore": {
+                    "description": "Whether the client syncs again at once: with `nextCursor` if the result has one, else from\n`nextFrom`. True when a catch-up stopped short (R14), and on every page of a paged first read (R26).",
+                    "type": "boolean"
+                },
+                "nextCursor": {
+                    "description": "An opaque token representing the pagination position after the last returned result.\nIf present, there may be more results available.",
+                    "type": "string"
+                },
+                "nextFrom": {
+                    "description": "The moment the client is caught up to once it has applied the result, the same on every page of a first read.",
+                    "type": "string"
+                },
+                "nextPollMs": {
+                    "description": "How long a client that polls waits before its next sync, in milliseconds (D12).",
+                    "type": "integer"
+                },
+                "resultType": {
+                    "description": "Indicates the type of the result, which allows the client to determine\nhow to parse the result object.\n\nServers implementing this protocol version MUST include this field.\nFor backward compatibility, when a client receives a result from a\nserver implementing an earlier protocol version (which does not include\n`resultType`), the client MUST treat the absent field as `\"complete\"`.",
+                    "type": "string"
+                },
+                "subscription": {
+                    "$ref": "#/$defs/SyncCollectionSubscription",
+                    "description": "Present when the request carried a `delivery`."
+                }
+            },
+            "required": [
+                "changes",
+                "hasMore",
+                "nextFrom",
+                "nextPollMs",
+                "resultType"
+            ],
+            "type": "object"
+        },
+        "SyncCollectionSubscription": {
+            "description": "The subscription a sync with a `delivery` made or refreshed, as SEP-3415's `events/subscribe` reports one.",
+            "properties": {
+                "deliveryStatus": {
+                    "$ref": "#/$defs/WebhookDeliveryStatus"
+                },
+                "id": {
+                    "description": "Derived from the subscription key, and carried in `X-MCP-Subscription-Id` on every delivery.",
+                    "type": "string"
+                },
+                "refreshBefore": {
+                    "description": "When the grant ends, or `null` for no expiry.",
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                }
+            },
+            "required": [
+                "id",
+                "refreshBefore"
+            ],
+            "type": "object"
+        },
         "TextResourceContents": {
             "properties": {
                 "_meta": {
@@ -961,6 +1111,73 @@
                     "type": "string"
                 }
             },
+            "type": "object"
+        },
+        "WebhookDelivery": {
+            "description": "Where and how a webhook subscription delivers.",
+            "properties": {
+                "mode": {
+                    "const": "webhook",
+                    "description": "Every example in SEP-3415 carries it, though its text requires only `url` and `secret`.",
+                    "type": "string"
+                },
+                "secret": {
+                    "description": "A Standard Webhooks secret: `whsec_` and the base64 of 24 to 64 random bytes.",
+                    "type": "string"
+                },
+                "url": {
+                    "description": "The callback URL, which must be `https`.",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "secret",
+                "url"
+            ],
+            "type": "object"
+        },
+        "WebhookDeliveryStatus": {
+            "properties": {
+                "active": {
+                    "type": "boolean"
+                },
+                "failedSince": {
+                    "type": "string"
+                },
+                "lastDeliveryAt": {
+                    "type": [
+                        "null",
+                        "string"
+                    ]
+                },
+                "lastError": {
+                    "anyOf": [
+                        {
+                            "enum": [
+                                "challenge_failed",
+                                "connection_refused",
+                                "http_4xx",
+                                "http_5xx",
+                                "timeout",
+                                "tls_error"
+                            ],
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ]
+                },
+                "retryAfterMs": {
+                    "type": "integer"
+                },
+                "throttled": {
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "active"
+            ],
             "type": "object"
         },
         "WriteContents": {

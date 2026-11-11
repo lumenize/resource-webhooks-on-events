@@ -59,6 +59,7 @@ const NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   ['events/stream', ['name']],
   ['resources/collection/read', ['uri', 'uriTemplate']],
   ['resources/collection/catchup', ['uri', 'uriTemplate']],
+  ['resources/collection/sync', ['uri', 'uriTemplate']],
 ]);
 
 const EVENTS = 'io.modelcontextprotocol/events';
@@ -68,6 +69,7 @@ const RESOURCE_EVENTS = 'io.modelcontextprotocol/resource-events';
 const EXTENSION_OF: ReadonlyMap<string, string> = new Map([
   ['resources/collection/read', RESOURCE_EVENTS],
   ['resources/collection/catchup', RESOURCE_EVENTS],
+  ['resources/collection/sync', RESOURCE_EVENTS],
   ['events/list', EVENTS],
   ['events/subscribe', EVENTS],
   ['events/unsubscribe', EVENTS],

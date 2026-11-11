@@ -21,7 +21,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const reply = x.gate.hold('resources/collection/catchup', 'reply');
     const run = x.copies.trigger('started', named);
     await reply.reached;
-    const event = x.copies.event({ eventId: latest, data: { ...named } });
+    const event = x.copies.event({ eventId: latest, data: { ...named, previousMoment: latest } });
     reply.release();
     await run;
     const catchUps = x.gate.requests.filter(({ method }) => method === 'resources/collection/catchup');
@@ -69,7 +69,7 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const watching = x.copies.watch(named);
     await page.reached;
     const three = await create(lane, 'tickets/ticket-3', ticket('ticket-3'));
-    const event = x.copies.event({ eventId: three.revision, data: { ...named, changes: three.changes } });
+    const event = x.copies.event({ eventId: three.revision, data: { ...named, previousMoment: three.revision, changes: three.changes } });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(x.log.filter((entry) => entry.kind === 'event')).toEqual([]);
     page.release();

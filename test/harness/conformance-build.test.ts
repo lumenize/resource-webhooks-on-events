@@ -40,6 +40,15 @@ describe('with CONFORMANCE set', () => {
     expect((await call(server, 'localhost:8788', 'server/discover')).status).toBe(200);
   });
 
+  it('R18: gives the suite no token for a sync that carries a delivery, and one for a sync that carries none', async () => {
+    const uriTemplate = 'http://localhost:8788/server/A/tickets/{id}';
+    const delivery = { mode: 'webhook', url: 'https://receiver.invalid/hook', secret: `whsec_${btoa('x'.repeat(32))}` };
+    const subscribing = await call(server, 'localhost:8788', 'resources/collection/sync', { uriTemplate, delivery }, { 'Mcp-Name': uriTemplate });
+    expect(subscribing.status).toBe(401);
+    const reading = await call(server, 'localhost:8788', 'resources/collection/sync', { uriTemplate }, { 'Mcp-Name': uriTemplate });
+    expect(reading.status).toBe(200);
+  });
+
   it("calls a host's tool, refuses one it lacks, and reads a host's resource and template", async () => {
     const called = await call(server, 'localhost:8788', 'tools/call', { name: 'test_simple_text', arguments: {} }, { 'Mcp-Name': 'test_simple_text' });
     expect(await called.json()).toMatchObject({ result: { content: [{ type: 'text' }] } });

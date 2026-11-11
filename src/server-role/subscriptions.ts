@@ -14,6 +14,8 @@ export interface SubscriptionsOptions {
   maxTtlMs: number;
   /** How many subscriptions one principal may hold. */
   subscriptionCap: number;
+  /** The latest moment of the timeline a subscription's arguments name, as canonical JSON. */
+  latestFor: (argumentsJson: string) => string;
 }
 
 /** What identifies a subscription, SEP-3415's `(principal, url, name, arguments)`. */
@@ -29,6 +31,11 @@ export interface Subscription extends SubscriptionKey {
   id: string;
   secret: string;
   expiresAt: string;
+}
+
+/** A subscription as A holds it, with the moment its next event names as `previousMoment` (R10). */
+export interface HeldSubscription extends Subscription {
+  lastEventMoment: string;
 }
 
 export class Subscriptions {
@@ -49,9 +56,17 @@ export class Subscriptions {
         id TEXT NOT NULL,
         secret TEXT NOT NULL,
         expiresAt TEXT NOT NULL,
+        lastEventMoment TEXT,
         PRIMARY KEY (principal, url, name, arguments)
       ) WITHOUT ROWID;
     `);
+    // A table made before events carried `previousMoment` lacks the column. Its rows, like any
+    // written since, start at their timeline's latest moment, which can only make a client sync.
+    const columns = sql.exec<{ name: string }>("SELECT name FROM pragma_table_info('Subscriptions')").toArray();
+    if (!columns.some(({ name }) => name === 'lastEventMoment')) sql.exec('ALTER TABLE Subscriptions ADD COLUMN lastEventMoment TEXT');
+    for (const row of sql.exec<SubscriptionKey & Record<string, SqlStorageValue>>('SELECT principal, url, name, arguments FROM Subscriptions WHERE lastEventMoment IS NULL').toArray()) {
+      this.#setLastEventMoment(row, options.latestFor(row.arguments));
+    }
     // Expired subscriptions are swept when A wakes, and skipped lazily: the queue makes no attempt
     // past a message's grant, and the cap and an unsubscribe pass over them.
     sql.exec('DELETE FROM Subscriptions WHERE expiresAt < ?', new Date().toISOString());
@@ -105,13 +120,15 @@ export class Subscriptions {
   /**
    * Writes the subscription, or refreshes it, replacing its secret and grant. A handshake
    * awaited a fetch before this, which let other requests in, a Wipe or this principal's other
-   * subscribes among them, so it checks both again, and writes, in one synchronous step.
+   * subscribes among them, so it checks both again, and writes, in one synchronous step. Every
+   * write, a refresh included, starts the subscription's next event at its timeline's latest
+   * moment, read in that same step, so no change made before it goes unnamed (R10).
    */
   write(subscription: Subscription, generation: number): void {
     if (generation !== this.#generation) throw new JsonRpcError(FORBIDDEN, 'The server was wiped while this subscribe waited for its handshake');
     this.requireUnderCap(subscription);
     this.#sql.exec(
-      'INSERT OR REPLACE INTO Subscriptions (principal, url, name, arguments, id, secret, expiresAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT OR REPLACE INTO Subscriptions (principal, url, name, arguments, id, secret, expiresAt, lastEventMoment) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       subscription.principal,
       subscription.url,
       subscription.name,
@@ -119,7 +136,21 @@ export class Subscriptions {
       subscription.id,
       subscription.secret,
       subscription.expiresAt,
+      this.#options.latestFor(subscription.arguments),
     );
+  }
+
+  /**
+   * Stores `moment` as the moment of the subscription's last event, and answers the one it
+   * replaces, which that event carries as `previousMoment` (R10).
+   */
+  advance(subscription: HeldSubscription, moment: string): string {
+    this.#setLastEventMoment(subscription, moment);
+    return subscription.lastEventMoment;
+  }
+
+  #setLastEventMoment(key: SubscriptionKey, moment: string): void {
+    this.#sql.exec('UPDATE Subscriptions SET lastEventMoment = ? WHERE principal = ? AND url = ? AND name = ? AND arguments = ?', moment, key.principal, key.url, key.name, key.arguments);
   }
 
   /** Removes a subscription, and answers its id, or undefined when the key matches none or one that lapsed. */
@@ -137,9 +168,9 @@ export class Subscriptions {
   }
 
   /** Every subscription to the event `name`, a lapsed one included, since the queue makes no attempt past a message's grant. */
-  named(name: string): Subscription[] {
+  named(name: string): HeldSubscription[] {
     return this.#sql
-      .exec<Subscription & Record<string, SqlStorageValue>>('SELECT principal, url, name, arguments, id, secret, expiresAt FROM Subscriptions WHERE name = ?', name)
+      .exec<HeldSubscription & Record<string, SqlStorageValue>>('SELECT principal, url, name, arguments, id, secret, expiresAt, lastEventMoment FROM Subscriptions WHERE name = ?', name)
       .toArray();
   }
 

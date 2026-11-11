@@ -15,8 +15,9 @@ import {
   type EventsSubscribeResult,
   type EventsUnsubscribeRequestParams,
   type EventType,
+  type WebhookDelivery,
 } from '../events-types';
-import { COLLECTION_UPDATED, type ChangeSetEntry, type CollectionUpdatedData, type UriSpecification } from '../extension-types';
+import { COLLECTION_UPDATED, type ChangeSetEntry, type CollectionUpdatedData, type SyncCollectionSubscription, type UriSpecification } from '../extension-types';
 import { INVALID_PARAMS, type Result } from '../vendor/mcp-spec/2026-07-28/schema';
 import { randomId, type Deliveries, type Message } from './deliveries';
 import { MAX_NAMED_TEMPLATE_BYTES, MAX_NAMED_URI_BYTES, type Collections } from './collections';
@@ -60,8 +61,19 @@ interface EventSource {
   named: UriSpecification;
   eventId: string;
   timestamp: string;
+  /** The moment of the subscription's event before this one, or where the subscription began (R10). */
+  previousMoment: string;
   /** The covered entries, or undefined when the event leaves them out. */
   changes: ChangeSetEntry[] | undefined;
+}
+
+/** A subscription whose endpoint has answered its handshake, which `commit` then writes. */
+export interface VerifiedSubscription {
+  key: SubscriptionKey;
+  id: string;
+  secret: string;
+  /** How many Wipes A had seen before the handshake went out. */
+  generation: number;
 }
 
 export interface EventsOptions {
@@ -85,6 +97,32 @@ export class Events {
   }
 
   async subscribe(params: EventsSubscribeRequestParams, principal: string | undefined): Promise<EventsSubscribeResult> {
+    const verified = await this.#verify(params, principal);
+    return { resultType: 'complete', ...this.commit(verified, params.ttlMs), cursor: null, truncated: false };
+  }
+
+  /**
+   * The awaited half of subscribing, for a sync that carries a `delivery`: every check
+   * `events/subscribe` makes of the principal, the uri-specification and the delivery, then the
+   * handshake (R18). Nothing is written until `commit`.
+   */
+  verify(named: UriSpecification, delivery: WebhookDelivery, principal: string | undefined): Promise<VerifiedSubscription> {
+    return this.#verify({ name: COLLECTION_UPDATED, arguments: { ...named }, delivery }, principal);
+  }
+
+  /**
+   * Writes a verified subscription, or refreshes it, in one synchronous step, which a sync shares
+   * with the read of its result, so no change falls between the two (R18).
+   */
+  commit({ key, id, secret, generation }: VerifiedSubscription, ttlMs: number | null | undefined): SyncCollectionSubscription {
+    const refreshBefore = this.#options.subscriptions.grant(ttlMs);
+    this.#options.subscriptions.write({ ...key, id, secret, expiresAt: refreshBefore }, generation);
+    return { id, refreshBefore };
+  }
+
+  // The delivery's own checks, the cap and the count of Wipes all come before the first await,
+  // so a refusal sends no challenge, and a Wipe that lands while one is out is seen at the write.
+  async #verify(params: { name: string; arguments?: { [key: string]: unknown }; delivery: WebhookDelivery }, principal: string | undefined): Promise<VerifiedSubscription> {
     const { subscriptions, deliveries } = this.#options;
     const { key, named } = this.#key(params, principal);
     const { secret } = params.delivery;
@@ -93,9 +131,7 @@ export class Events {
     const generation = subscriptions.generation;
     const id = await subscriptions.idFor([key.principal, key.url, key.name, named]);
     await deliveries.requireVerified(key.principal, key.url, secret, id);
-    const refreshBefore = subscriptions.grant(params.ttlMs);
-    subscriptions.write({ ...key, id, secret, expiresAt: refreshBefore }, generation);
-    return { resultType: 'complete', id, refreshBefore, cursor: null, truncated: false };
+    return { key, id, secret, generation };
   }
 
   unsubscribe(params: EventsUnsubscribeRequestParams, principal: string | undefined): Result {
@@ -116,7 +152,8 @@ export class Events {
   /**
    * Sends one event for a committed write to each live subscription that covers a resource it
    * changed, listing the entries it covers. Every entry a subscription covers is on its timeline,
-   * so they share one moment, the event's `eventId`.
+   * so they share one moment, the event's `eventId`. It stores that moment as the subscription's
+   * last before it queues the event, which carries the moment it replaced (R10).
    */
   notify(changes: readonly Change[]): void {
     // A lapsed subscription's row stays until A next starts, and the queue makes no attempt past
@@ -126,7 +163,9 @@ export class Events {
       const covers = this.#options.collections.covers(named);
       const covered = changes.filter(({ path }) => covers(path));
       if (covered.length === 0) continue;
-      const source: EventSource = { named, eventId: covered[0].entry.revision, timestamp: covered[0].writtenAt, changes: covered.map(({ entry }) => entry) };
+      const eventId = covered[0].entry.revision;
+      const previousMoment = this.#options.subscriptions.advance(subscription, eventId);
+      const source: EventSource = { named, eventId, timestamp: covered[0].writtenAt, previousMoment, changes: covered.map(({ entry }) => entry) };
       const webhookId = `msg_${randomId(24)}`;
       this.#options.deliveries.enqueue(subscription.id, {
         url: subscription.url,
@@ -142,14 +181,14 @@ export class Events {
 
   /**
    * The event to send for a subscription in place of an older one not yet delivered and a newer
-   * one: the newer's `eventId`, `timestamp` and webhook-id, and each uri once, running from the
-   * older's start to the newer's end. It leaves `changes` out when either did, or when together
-   * they would pass the limit.
+   * one: the newer's `eventId`, `timestamp` and webhook-id, the older's `previousMoment`, and
+   * each uri once, running from the older's start to the newer's end. It leaves `changes` out
+   * when either did, or when together they would pass the limit.
    */
   merge(older: Message, newer: Message): Message {
     const [before, after] = [older.source as EventSource, newer.source as EventSource];
     const changes = before.changes && after.changes ? mergeEntries(before.changes, after.changes) : undefined;
-    const source: EventSource = { ...after, changes };
+    const source: EventSource = { ...after, previousMoment: before.previousMoment, changes };
     return { ...newer, body: this.#body(source), source };
   }
 
@@ -157,7 +196,7 @@ export class Events {
   // which it records on the source, so a merge with it leaves them out too.
   #body(source: EventSource): string {
     const occurrence = (changes: ChangeSetEntry[] | undefined): EventOccurrence => {
-      const data: CollectionUpdatedData = { ...source.named, ...(changes ? { changes } : {}) };
+      const data: CollectionUpdatedData = { ...source.named, previousMoment: source.previousMoment, ...(changes ? { changes } : {}) };
       return { eventId: source.eventId, name: COLLECTION_UPDATED, timestamp: source.timestamp, data: { ...data }, cursor: null };
     };
     const whole = JSON.stringify(occurrence(source.changes));

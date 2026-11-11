@@ -70,7 +70,7 @@ export async function eventsScenario(tier: Tier): Promise<void> {
     eventId: reply.revision,
     name: EVENT,
     timestamp: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/),
-    data: { ...template, changes: [{ uri: uri('ticket-3'), effect: 'updated', previousRevision: three.revision, revision: reply.revision }] },
+    data: { ...template, previousMoment: duplicate.revision, changes: [{ uri: uri('ticket-3'), effect: 'updated', previousRevision: three.revision, revision: reply.revision }] },
     cursor: null,
   });
 

@@ -10,6 +10,8 @@ import {
   RESOURCE_EVENTS_EXTENSION,
   type CatchUpCollectionRequestParams,
   type ReadCollectionRequestParams,
+  type SyncCollectionRequestParams,
+  type SyncCollectionResult,
   NOT_SUPPORTED,
   PRECONDITION_FAILED,
   RESOURCE_OPERATIONS_EXTENSION,
@@ -181,6 +183,7 @@ export class ServerRole {
       subscriptionIdKey: options.subscriptionIdKey,
       maxTtlMs: options.maxTtlMs,
       subscriptionCap: options.subscriptionCap,
+      latestFor: (argumentsJson) => this.#collections.latest(JSON.parse(argumentsJson) as { uri?: string; uriTemplate?: string }),
     });
     this.#events = new Events({ deliveries: this.#deliveries, subscriptions: this.#subscriptions, collections: this.#collections, eventBodyLimit: options.eventBodyLimit });
     const methods: [string, Method][] = [
@@ -194,6 +197,7 @@ export class ServerRole {
       ['resources/delete', (params) => this.#delete(params as unknown as DeleteResourceRequestParams)],
       ['resources/collection/read', (params) => this.#collections.read(params as unknown as ReadCollectionRequestParams)],
       ['resources/collection/catchup', (params) => this.#collections.catchUp(params as unknown as CatchUpCollectionRequestParams)],
+      ['resources/collection/sync', (params, principal) => this.#sync(params as unknown as SyncCollectionRequestParams, principal)],
       ['events/list', (params) => (requireNoCursor(params), this.#events.list())],
       ['events/subscribe', (params, principal) => this.#events.subscribe(params as unknown as EventsSubscribeRequestParams, principal)],
       ['events/unsubscribe', (params, principal) => this.#events.unsubscribe(params as unknown as EventsUnsubscribeRequestParams, principal)],
@@ -253,6 +257,20 @@ export class ServerRole {
     this.#deliveries.clear();
     this.#subscriptions.clear();
     this.store.wipe();
+  }
+
+  // One sync. With a `delivery` it subscribes too: the refusals that need nothing from after the
+  // handshake come first, so they send no challenge, then the handshake, and then the result and
+  // the subscription's write in one synchronous step, the result first, so a sync that is refused
+  // there writes nothing, and no change falls between its `nextFrom` and the subscription (R18).
+  async #sync(params: SyncCollectionRequestParams, principal: string | undefined): Promise<SyncCollectionResult> {
+    this.#collections.requireSyncable(params);
+    if (params.delivery === undefined) return this.#collections.sync(params);
+    const { uri, uriTemplate } = params;
+    const named = { ...(uri === undefined ? {} : { uri }), ...(uriTemplate === undefined ? {} : { uriTemplate }) };
+    const verified = await this.#events.verify(named, params.delivery, principal);
+    const result = this.#collections.sync(params);
+    return { ...result, subscription: this.#events.commit(verified, params.ttlMs) };
   }
 
   #tools(): readonly ExtraTool[] {

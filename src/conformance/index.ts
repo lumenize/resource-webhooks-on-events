@@ -10,7 +10,8 @@ import { FIXTURES } from './fixtures';
 type ConformanceEnv = Env & { CONFORMANCE?: string };
 
 // The suite sends no token, so this build gives it one for A's methods, but never for
-// events/subscribe and events/unsubscribe, since a subscription makes A POST wherever it names.
+// events/subscribe and events/unsubscribe, nor for any request that carries a `delivery`, as a
+// sync may, since a subscription makes A POST wherever it names.
 const NEVER_OPENED = new Set(['events/subscribe', 'events/unsubscribe']);
 
 export { Gateway } from '../gateway';
@@ -34,12 +35,14 @@ async function withSuiteToken(request: Request, env: ConformanceEnv): Promise<Re
   const endpoint = mcpEndpoint(env.ORIGIN, env.SERVER_INSTANCE);
   if (request.method !== 'POST' || request.url !== endpoint || request.headers.has('Authorization')) return request;
   let method: unknown;
+  let params: unknown;
   try {
-    method = (JSON.parse(await request.clone().text()) as { method?: unknown }).method;
+    ({ method, params } = JSON.parse(await request.clone().text()) as { method?: unknown; params?: unknown });
   } catch {
     method = undefined;
   }
   if (typeof method === 'string' && NEVER_OPENED.has(method)) return request;
+  if (typeof params === 'object' && params !== null && 'delivery' in params) return request;
   const now = Math.floor(Date.now() / 1000);
   // Each run starts on fresh storage, so A's Wipe count is 0.
   const token = await signToken(env.TOKEN_SIGNING_KEY, { iss: env.ORIGIN, sub: 'conformance-suite', aud: endpoint, iat: now, exp: now + 300, epoch: 0 });

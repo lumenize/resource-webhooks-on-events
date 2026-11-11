@@ -31,6 +31,7 @@ const MCP_NAME_SOURCES: ReadonlyMap<string, readonly string[]> = new Map([
   // The extension's methods name their collection, as resources/read names its uri (D23).
   ['resources/collection/read', ['uri', 'uriTemplate']],
   ['resources/collection/catchup', ['uri', 'uriTemplate']],
+  ['resources/collection/sync', ['uri', 'uriTemplate']],
 ]);
 
 const BASE64_SENTINEL = /^=\?base64\?(.*)\?=$/;

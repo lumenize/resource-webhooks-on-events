@@ -8,6 +8,8 @@ import type {
   CollectionChange,
   ReadCollectionRequestParams,
   ReadCollectionResult,
+  SyncCollectionRequestParams,
+  SyncCollectionResult,
   UriSpecification,
 } from '../extension-types';
 import { MERGE_PATCH_MIME_TYPE, RESOURCE_REVISION_META_KEY } from '../extension-types';
@@ -76,6 +78,55 @@ export class Collections {
       if (!Number.isInteger(value) || value < 1) throw new RangeError(`The ${name} must be a positive integer, not ${value}`);
     }
     this.#options = options;
+  }
+
+  /**
+   * One sync: a page of a first read when it names no `from`, each resource as a `created` entry
+   * with its contents (R22), and a catch-up from `from` otherwise (R13). `hasMore` is true on
+   * every page of a paged first read, the last included, so the client then syncs from `nextFrom`
+   * and gets what changed while it paged (R26).
+   */
+  sync(params: SyncCollectionRequestParams): SyncCollectionResult {
+    this.requireSyncable(params);
+    if (params.from !== undefined) return this.catchUp({ ...params, from: params.from });
+    const page = this.read(params);
+    const changes = page.contents.map((contents): CollectionChange => {
+      const revision = contents._meta![RESOURCE_REVISION_META_KEY] as string;
+      return { uri: contents.uri, effect: 'created', revision, contents };
+    });
+    const paged = params.cursor !== undefined || page.nextCursor !== undefined;
+    return {
+      resultType: 'complete',
+      changes,
+      hasMore: paged,
+      nextFrom: page.nextFrom,
+      nextPollMs: NEXT_POLL_MS,
+      ...(page.nextCursor === undefined ? {} : { nextCursor: page.nextCursor }),
+    };
+  }
+
+  /**
+   * Refuses a sync that A can refuse before it posts a handshake anywhere: a `cursor` beside a
+   * `from` or a `delivery`, a uri-specification no listed one covers, a `from` that is no moment,
+   * and one older than A keeps, which the sync itself checks again.
+   */
+  requireSyncable(params: SyncCollectionRequestParams): void {
+    const coverage = this.#coverage(params);
+    const { from, cursor } = params;
+    if (cursor !== undefined && from !== undefined) throw new JsonRpcError(INVALID_PARAMS, 'Name a cursor or a from, not both', coverage.named);
+    if (cursor !== undefined && params.delivery !== undefined) {
+      throw new JsonRpcError(INVALID_PARAMS, 'Only the first page of a sync carries a delivery', coverage.named);
+    }
+    if (from === undefined) return;
+    if (!isMoment(from)) throw new JsonRpcError(INVALID_PARAMS, 'from is not a moment of this server', { ...coverage.named, from });
+    if (from < this.#options.store.oldest(coverage.timeline)) {
+      throw new JsonRpcError(INVALID_PARAMS, 'The moment is older than this server keeps', { reason: 'momentExpired', ...coverage.named });
+    }
+  }
+
+  /** The latest moment of the timeline the uri-specification is on. */
+  latest(named: UriSpecification): string {
+    return this.#options.store.latest(this.#coverage(named).timeline);
   }
 
   /**

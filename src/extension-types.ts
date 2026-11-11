@@ -2,11 +2,13 @@
 // resource operations, which A serves, as this extension amends them, since every change-set
 // entry carries `revision`, a deletion's included (R7), and the extension's own two methods and
 // event. `npm run generate:schema` writes their JSON Schema to extension-types.schema.json.
+import type { WebhookDelivery, WebhookDeliveryStatus } from './events-types';
 import type {
   BlobResourceContents,
   CacheableResult,
   Cursor,
   JSONRPCRequest,
+  PaginatedRequestParams,
   PaginatedResult,
   RequestParams,
   Resource,
@@ -181,8 +183,66 @@ export interface CatchUpCollectionResult extends Result {
   nextPollMs: number;
 }
 
+export interface SyncCollectionRequestParams extends PaginatedRequestParams, UriSpecification {
+  /**
+   * The moment the client is caught up to, which makes the sync a catch-up (R13). Without it the
+   * sync is a first read, of every resource in the collection (R22).
+   */
+  from?: string;
+  /** The patch formats the client applies, by media type (R19). */
+  patchMimeTypes?: string[];
+  /**
+   * Where to deliver the collection's events, as in SEP-3415's `events/subscribe`. With it the
+   * sync makes the subscription, or refreshes it, in the same step as its result (R18). Without
+   * it the sync stores nothing.
+   */
+  delivery?: WebhookDelivery;
+  /** The subscription's suggested lifetime in milliseconds, as in SEP-3415. `null` asks for no expiry. */
+  ttlMs?: number | null;
+}
+
+/**
+ * Brings a collection to the client: every resource in it, or every change after `from`, and
+ * with a `delivery`, a subscription to its events (R13, R18, R22).
+ */
+export interface SyncCollectionRequest extends JSONRPCRequest {
+  method: 'resources/collection/sync';
+  params: SyncCollectionRequestParams;
+}
+
+/** The subscription a sync with a `delivery` made or refreshed, as SEP-3415's `events/subscribe` reports one. */
+export interface SyncCollectionSubscription {
+  /** Derived from the subscription key, and carried in `X-MCP-Subscription-Id` on every delivery. */
+  id: string;
+  /** When the grant ends, or `null` for no expiry. */
+  refreshBefore: string | null;
+  deliveryStatus?: WebhookDeliveryStatus;
+}
+
+export interface SyncCollectionResult extends PaginatedResult {
+  /** A first read's resources, each as a `created` entry with its contents, or a catch-up's changes (R19). */
+  changes: CollectionChange[];
+  /**
+   * Whether the client syncs again at once: with `nextCursor` if the result has one, else from
+   * `nextFrom`. True when a catch-up stopped short (R14), and on every page of a paged first read (R26).
+   */
+  hasMore: boolean;
+  /** The moment the client is caught up to once it has applied the result, the same on every page of a first read. */
+  nextFrom: string;
+  /** How long a client that polls waits before its next sync, in milliseconds (D12). */
+  nextPollMs: number;
+  /** Present when the request carried a `delivery`. */
+  subscription?: SyncCollectionSubscription;
+}
+
 /** An `mcp.resource.collection.updated` occurrence's `data`: the subscription's uri-specification, and the change (R10). */
 export interface CollectionUpdatedData extends UriSpecification {
+  /**
+   * The moment of the event before this one on the same subscription, or the timeline's latest
+   * moment when the subscription was last written. A client caught up to an earlier moment has
+   * not accounted for that event, and syncs (R11).
+   */
+  previousMoment: string;
   /**
    * The change's change-set entries for the resources the subscription covers, left out when they
    * would take the delivery past the size SEP-3415 asks for.

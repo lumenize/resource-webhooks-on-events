@@ -22,7 +22,7 @@ interface Event {
   eventId: string;
   name: string;
   timestamp: string;
-  data: { uri?: string; uriTemplate?: string; changes?: ChangeSetEntry[] };
+  data: { uri?: string; uriTemplate?: string; previousMoment: string; changes?: ChangeSetEntry[] };
   cursor: null;
 }
 
@@ -64,13 +64,15 @@ describe('what A declares', () => {
     ]).toEqual([true, true, false, false, false, false, false]);
     const payload = new Validator(type.payloadSchema as object, '2020-12');
     const entry = { uri: `${lane.root}/tickets/ticket-3`, effect: 'deleted', previousRevision: '000000000001', revision: '000000000002' };
+    const previousMoment = '000000000001';
     expect([
+      payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, previousMoment, changes: [entry] }).valid,
+      payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, previousMoment }).valid,
       payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, changes: [entry] }).valid,
-      payload.validate({ uriTemplate: `${lane.root}/tickets/{id}` }).valid,
-      payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, changes: [{ uri: entry.uri, effect: entry.effect }] }).valid,
-      payload.validate({ uri: entry.uri, uriTemplate: `${lane.root}/tickets/{id}`, changes: [entry] }).valid,
-      payload.validate({ changes: [entry] }).valid,
-    ]).toEqual([true, true, false, false, false]);
+      payload.validate({ uriTemplate: `${lane.root}/tickets/{id}`, previousMoment, changes: [{ uri: entry.uri, effect: entry.effect }] }).valid,
+      payload.validate({ uri: entry.uri, uriTemplate: `${lane.root}/tickets/{id}`, previousMoment, changes: [entry] }).valid,
+      payload.validate({ previousMoment, changes: [entry] }).valid,
+    ]).toEqual([true, true, false, false, false, false]);
   });
 
   it('R20: refuses a subscribe naming a uriTemplate past 1 KiB, or a uri past 2 KiB, with InvalidParams', async () => {
@@ -122,18 +124,19 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     expect(endpoint.challenges()).toEqual([]);
   });
 
-  it("R10: sends one event for one change, with the subscription's arguments, its covered entries, the moment as eventId and the commit time", async () => {
+  it("R10: sends one event for one change, with the subscription's arguments, the moment before it, its covered entries, the moment as eventId and the commit time", async () => {
     const lane = newLane(layout);
     const b = await signedIn(lane, 'b');
     const template = { uriTemplate: `${lane.root}/tickets/{id}` };
     const { events } = await receiving(b, template);
+    const began = (await timelines(lane))[TICKETS(layout)].latest;
     const opened = await create(lane, 'tickets/ticket-3', { title: 'Printer jams', status: 'open' });
     const { resource } = (await lane.client.request('resources/stat', { uri: `${lane.root}/tickets/ticket-3` })) as StatResourceResult;
     const [deleted] = (await remove(lane, 'tickets/ticket-3', opened.revision)).changes;
     await vi.waitFor(() => expect(events()).toHaveLength(2));
     expect(events()).toEqual([
-      { eventId: opened.revision, name: EVENT, timestamp: resource.annotations!.lastModified, data: { ...template, changes: opened.changes }, cursor: null },
-      { eventId: deleted.revision, name: EVENT, timestamp: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), data: { ...template, changes: [deleted] }, cursor: null },
+      { eventId: opened.revision, name: EVENT, timestamp: resource.annotations!.lastModified, data: { ...template, previousMoment: began, changes: opened.changes }, cursor: null },
+      { eventId: deleted.revision, name: EVENT, timestamp: expect.stringMatching(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/), data: { ...template, previousMoment: opened.revision, changes: [deleted] }, cursor: null },
     ]);
     expect(deleted).toMatchObject({ effect: 'deleted', revision: expect.any(String) });
   });
@@ -234,6 +237,8 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
     const event = JSON.parse(merged.body) as Event;
     expect({ eventId: event.eventId, uris: uris(event, lane) }).toEqual({ eventId: four.revision, uris: ['tickets/ticket-3', 'tickets/ticket-4'] });
     expect(event.data.changes![0]).toEqual(closed.changes[0]);
+    // The merged event names the moment before the older one, which the receiver may never have got.
+    expect([(JSON.parse(hung.body) as Event).data.previousMoment, event.data.previousMoment]).toEqual([opened.revision, opened.revision]);
   });
 
   it('R10: after a restart mid-retry, the next event lists its change alone, and a catch-up brings the change the restart dropped', async () => {
@@ -259,6 +264,8 @@ describe.each(LAYOUTS)('on the %s layout', (layout) => {
       [dropped.revision, ['tickets/ticket-3']],
       [sentinel.revision, ['tickets/ticket-4']],
     ]);
+    // The stored moment outlives the restart, so the next event names the dropped change before it.
+    expect(events.map((event) => event.data.previousMoment)).toEqual([from, dropped.revision]);
     expect((await catchUp(lane, 'tickets/{id}', from)).changes.map(({ revision }) => revision)).toContain(dropped.revision);
   });
 
