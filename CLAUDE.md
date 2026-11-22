@@ -50,9 +50,9 @@ Linked from lumenize: `/write-task`, `/review-task`, `/build-task` and `/refacto
 - `../resource-webhooks-standalone` is the first flavor, and this repo's mining source. Its code, task files and proposal stay untouched until a mining pass gives each piece a fate: carried, superseded or dropped on purpose. Nothing is copied in except through that pass, so nothing from the first flavor arrives unexamined. Read it for facts when needed, and say so when an idea is carried from it.
 - `../experimental-ext-triggers-events` is the fork of the Tasks and Events working group's repo, still named for Triggers & Events (origin `lumenize/experimental-ext-triggers-events`, with `upstream`). Its `resource-webhooks` branch holds the first flavor's proposal. Its `resource-webhooks-on-events` branch holds this flavor's, `proposals/XXXX-resource-events.md`, for a PR to that repo, and `node scripts/check-proposal.mjs <that file>` checks it. The formal SEP follows in `../modelcontextprotocol`.
 - `../modelcontextprotocol` is the fork for SEP PRs (origin `lumenize/modelcontextprotocol`, with `upstream`).
-- `../mcp-typescript-sdk` is the fork for SDK PRs (origin `lmaccherone/mcp-typescript-sdk`). An Extensions Track SEP needs a reference implementation in an official SDK before review, and that goes there. It is far behind upstream, so sync it before branching.
+- The reference implementation goes in the official Python SDK, building on [python-sdk#3822](https://github.com/modelcontextprotocol/python-sdk/pull/3822), the Events extension's poll and webhook delivery. An Extensions Track SEP needs one in an official SDK before review. There is no local fork of the Python SDK yet. `../mcp-typescript-sdk`, the fork of the TypeScript SDK, is not used: Larry is not engaging with that SDK.
 - `../lumenize` is where the guidance above lives. Do not edit it from here unless Larry asks.
 
-In a sibling fork, follow that repo's own CLAUDE.md and tooling. The TypeScript SDK uses pnpm, and `critical.md`'s npm-only rule is for repos Larry owns, not for upstream forks.
+In a sibling fork, follow that repo's own CLAUDE.md and tooling. The Python SDK uses uv, and `critical.md`'s npm-only rule is for repos Larry owns, not for upstream forks.
 
 This repo's remote is the public `lumenize/resource-webhooks-on-events`. Pushing publishes, so push only when Larry asks.
